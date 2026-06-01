@@ -47,10 +47,9 @@ class VLAConfig:
     img_grid_h:     int = 8
     img_grid_w:     int = 8
 
-    # Experiment C: multi-scale layer extraction from Qwen
-    # hidden_states[i] = output after transformer layer i (1-indexed).
-    # (14, 21, 28) = early / mid / final — three scales.
-    vlm_extract_layers: tuple = (14, 21, 28)
+    # Single final layer — same as Exp1 for fair decoder comparison.
+    # Multi-scale extraction (14, 21, 28) deferred to Exp3.
+    vlm_extract_layers: tuple = (28,)
 
     @property
     def n_vlm_layers(self) -> int:
