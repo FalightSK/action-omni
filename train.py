@@ -23,62 +23,107 @@ sys.path.insert(0, str(ROOT))
 from config_loader import get_config
 from data.pusht_dataset import PushTEmbeddingDataset
 from models.vla import VLMTokenAdapter
-from models.flow_matching import FlowMatchingDecoder
+from models.flow_matching import FlowMatchingDecoder, DiTFlowDecoder
 
 
 # ── Joint model: adapter + decoder ────────────────────────────────────────────
 
 class VLATrainModel(nn.Module):
     """
-    Combines VLMTokenAdapter (per-token LoRA + spatial MLP + attention readout)
-    with FlowMatchingDecoder.
+    Combines VLMTokenAdapter with a flow-matching decoder.
 
-    v2 cache: embed (B, seq, 1024) + img_mask (B, seq) bool
-    v1 cache: embed (B, 1024)  — legacy, triggers a warning
+    Decoder selection (via cfg.use_dit_decoder):
+      False → FlowMatchingDecoder  (MLP, Exp1 baseline)
+      True  → DiTFlowDecoder       (transformer, Exp2+)
+
+    The DiT decoder receives two conditioning signals:
+      1. cond_vec   (B, cond_dim) — pooled VLM context + state, used for adaLN
+      2. vlm_tokens (B, seq, 512) — per-token spatially-aware features, used for
+                                     cross-attention at every denoising step
+
+    Cache compatibility:
+      v1: embed (B, 1024)         — legacy mean-pooled
+      v2: embed (B, seq, 1024)    — single-layer full sequence
+      v3: embed (B, L, seq, 1024) — multi-scale (Exp C)
     """
 
     def __init__(self, cfg: VLAConfig) -> None:
         super().__init__()
-        self.cfg = cfg
+        self.cfg     = cfg
+        self.use_dit = getattr(cfg, "use_dit_decoder", False)
+
         self.adapter = VLMTokenAdapter(
-            vlm_dim      = cfg.vlm_hidden_size,
-            adapter_dim  = cfg.vlm_adapter_dim,
-            lora_rank    = cfg.lora_rank,
-            lora_scale   = cfg.lora_scale,
-            pos_dim      = cfg.pos_enc_dim,
-            readout_heads= cfg.readout_heads,
-            dropout      = cfg.adapter_dropout,
-            img_grid_h   = cfg.img_grid_h,
-            img_grid_w   = cfg.img_grid_w,
-            n_vlm_layers = cfg.n_vlm_layers,
-        )
-        self.decoder = FlowMatchingDecoder(
-            action_dim = cfg.action_dim * cfg.action_horizon,
-            cond_dim   = cfg.cond_dim,
-            hidden_dim = cfg.decoder_hidden_dim,
-            num_layers = cfg.decoder_num_layers,
-            dropout    = cfg.decoder_dropout,
+            vlm_dim       = cfg.vlm_hidden_size,
+            adapter_dim   = cfg.vlm_adapter_dim,
+            lora_rank     = cfg.lora_rank,
+            lora_scale    = cfg.lora_scale,
+            pos_dim       = cfg.pos_enc_dim,
+            readout_heads = cfg.readout_heads,
+            dropout       = cfg.adapter_dropout,
+            img_grid_h    = cfg.img_grid_h,
+            img_grid_w    = cfg.img_grid_w,
+            n_vlm_layers  = cfg.n_vlm_layers,
         )
 
+        if self.use_dit:
+            self.decoder = DiTFlowDecoder(
+                action_dim     = cfg.action_dim,
+                action_horizon = cfg.action_horizon,
+                cond_dim       = cfg.cond_dim,
+                hidden_dim     = cfg.dit_hidden_dim,
+                num_layers     = cfg.dit_num_layers,
+                n_heads        = cfg.dit_num_heads,
+                cross_attn_dim = cfg.vlm_adapter_dim,   # 512 — after SpatialAwareMLP
+                dropout        = cfg.decoder_dropout,
+            )
+        else:
+            self.decoder = FlowMatchingDecoder(
+                action_dim = cfg.action_dim * cfg.action_horizon,
+                cond_dim   = cfg.cond_dim,
+                hidden_dim = cfg.decoder_hidden_dim,
+                num_layers = cfg.decoder_num_layers,
+                dropout    = cfg.decoder_dropout,
+            )
+
     def _build_cond(self, embed, state, img_mask):
-        if embed.ndim == 2:                                        # legacy v1
+        """
+        Returns (cond_vec, vlm_tokens).
+
+        cond_vec   : (B, cond_dim)   — pooled context ‖ state
+        vlm_tokens : (B, seq, 512)   — per-token spatially-encoded features
+                                       (used by DiT for cross-attention)
+        """
+        if embed.ndim == 2:                            # legacy v1 mean-pooled
             embed    = embed.unsqueeze(1)
             img_mask = torch.zeros(embed.shape[:2], dtype=torch.bool,
                                    device=embed.device)
         if img_mask is None:
             img_mask = torch.zeros(embed.shape[:2], dtype=torch.bool,
                                    device=embed.device)
-        return torch.cat([self.adapter(embed, img_mask), state], dim=-1)
+
+        context, vlm_tokens = self.adapter(embed, img_mask, return_tokens=True)
+        cond_vec = torch.cat([context, state], dim=-1)
+        return cond_vec, vlm_tokens
 
     def forward(self, embed, state, actions, img_mask=None):
-        cond = self._build_cond(embed, state, img_mask)
-        flat = actions.view(actions.shape[0], -1)
-        return self.decoder.compute_loss(flat, cond)
+        cond_vec, vlm_tokens = self._build_cond(embed, state, img_mask)
+        if self.use_dit:
+            # DiT: actions kept as (B, H, D) — each step is a separate token
+            return self.decoder.compute_loss(actions, cond_vec, vlm_tokens)
+        else:
+            # MLP: flatten to (B, H*D)
+            flat = actions.view(actions.shape[0], -1)
+            return self.decoder.compute_loss(flat, cond_vec)
 
     @torch.no_grad()
     def sample(self, embed, state, num_steps=3, img_mask=None):
-        cond = self._build_cond(embed, state, img_mask)
-        return self.decoder.sample(cond, num_steps=num_steps)
+        cond_vec, vlm_tokens = self._build_cond(embed, state, img_mask)
+        if self.use_dit:
+            out = self.decoder.sample(cond_vec, num_steps, vlm_tokens)  # (B, H, D)
+        else:
+            out = self.decoder.sample(cond_vec, num_steps)               # (B, H*D)
+        # Always return (B, H*D) flat for backward-compatible inference
+        return out.reshape(out.shape[0], -1)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

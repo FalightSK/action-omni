@@ -67,6 +67,7 @@ class VLAConfigExp1:
     adapter_dropout: float = 0.25
 
     # ── Decoder ───────────────────────────────────────────────────────────────
+    use_dit_decoder:    bool  = False   # Exp1 uses MLP decoder
     decoder_hidden_dim: int   = 512
     decoder_num_layers: int   = 6
     decoder_dropout:    float = 0.10

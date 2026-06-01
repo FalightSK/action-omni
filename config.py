@@ -64,11 +64,22 @@ class VLAConfig:
     readout_heads:   int   = 8
     adapter_dropout: float = 0.25
 
-    # ── Flow-matching decoder ─────────────────────────────────────────────────
+    # ── Flow-matching decoder — choose MLP (Exp1) or DiT (Exp2+) ─────────────
+    use_dit_decoder: bool = True    # DiT for Exp2; False = MLP (Exp1 baseline)
+
+    # MLP decoder params (kept for fallback / Exp1 reproduction)
     decoder_hidden_dim: int   = 512
     decoder_num_layers: int   = 6
     decoder_dropout:    float = 0.10
-    num_flow_steps:     int   = 3
+
+    # DiT decoder params
+    dit_hidden_dim:  int = 256   # token embedding dim inside DiT
+    dit_num_layers:  int = 6     # number of DiT blocks
+    dit_num_heads:   int = 8     # attention heads (256 / 8 = 32 per head)
+    # cross_attn_dim is derived: = vlm_adapter_dim (512)
+    # Each action step cross-attends to all 82 adapted VLM tokens.
+
+    num_flow_steps: int = 3
 
     # ── Conditioning dimension (derived) ─────────────────────────────────────
     # cond = adapted_embed (vlm_adapter_dim) ‖ norm_state (state_dim)

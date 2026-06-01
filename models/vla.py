@@ -358,9 +358,10 @@ class VLMTokenAdapter(nn.Module):
 
     def forward(
         self,
-        tokens:   torch.Tensor,   # (B, seq, 1024) or (B, n_layers, seq, 1024)
-        img_mask: torch.Tensor,   # (B, seq) bool
-    ) -> torch.Tensor:            # (B, adapter_dim)
+        tokens:       torch.Tensor,        # (B, seq, 1024) or (B, n_layers, seq, 1024)
+        img_mask:     torch.Tensor,        # (B, seq) bool
+        return_tokens: bool = False,       # also return pre-readout tokens for DiT cross-attn
+    ) -> torch.Tensor:                     # (B, adapter_dim)  or  tuple
         # Stage 0: fuse multi-scale layers if present
         if tokens.ndim == 4:
             tokens = self.fusion(tokens)          # (B, seq, 1024)
@@ -368,11 +369,18 @@ class VLMTokenAdapter(nn.Module):
         # Stage 1: per-token LoRA
         h = self.lora(tokens)                     # (B, seq, 1024)
 
-        # Stage 2: spatial-aware MLP
-        h = self.spatial(h, img_mask, self.grid_h, self.grid_w)  # (B, seq, 512)
+        # Stage 2: spatial-aware MLP — h is now (B, seq, adapter_dim=512)
+        h = self.spatial(h, img_mask, self.grid_h, self.grid_w)
 
-        # Stage 3: attention readout
-        return self.readout(h)                    # (B, 512)
+        # Stage 3: attention readout → single context vector
+        context = self.readout(h)                 # (B, adapter_dim)
+
+        if return_tokens:
+            # h: (B, seq, adapter_dim) — geometrically-aware per-token features
+            # Used by DiTFlowDecoder for cross-attention: each action step can
+            # query any of the 82 spatially-encoded VLM tokens at every denoising step.
+            return context, h
+        return context
 
 
 # ──────────────────────────────────────────────────────────────────────────────
