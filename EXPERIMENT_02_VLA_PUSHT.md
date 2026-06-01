@@ -227,15 +227,95 @@ Flow steps   : 3 (training & inference)
 
 ## 6. Results
 
-*(To be filled after training and evaluation)*
-
+### 6.1 Training
 | Metric | Exp1 (baseline) | Exp2 |
 |---|---|---|
-| Best val loss | 0.4490 (epoch 152) | — |
-| Success rate (SR) | 25% (5/20) | — |
-| Mean max coverage | 87.2% | — |
-| Episodes simulated | 20 | — |
+| Best val loss | 0.4490 (epoch 152) | **0.3483 (epoch 113)** |
+| Early stop at epoch | 202 | 163 |
+| MSE (normalised, val) | — | 0.2078 |
+| MAE (normalised, val) | — | 0.2506 |
+| L2 error (px, t+1) | — | 5.09 px |
+| L2 error (px, mean) | — | 7.95 px |
+| Directional accuracy | — | **96.9%** |
+
+Val loss improved **22.5%** over Exp1. Directional accuracy near-perfect.
+
+### 6.2 Simulation
+| Metric | Exp1 (baseline) | Exp2 |
+|---|---|---|
+| Success rate (SR) | **25% (5/20)** | **0% (0/20)** ⚠️ |
+| Mean max coverage | **87.2%** | **14.4%** ⚠️ |
+| Episodes with 0-10% cov | — | 10/20 |
+| Episodes with 30-50% cov | — | 4/20 |
 | Checkpoint | `asset/result/checkpoints/best.pt` | `asset/result_exp2/checkpoints/best.pt` |
+
+### 6.3 Flow Steps Sensitivity (Exp2)
+| Steps | MSE | L2 (px) |
+|---|---|---|
+| 1 | **0.1909** | 8.07 |
+| 3 | 0.2047 | 7.96 |
+| 5 | 0.2139 | 8.19 |
+| 10 | 0.2312 | 8.59 |
+| 20 | 0.2318 | 8.74 |
+
+More steps → **higher** error (inverted from Exp1). See diagnosis in §7.
+
+---
+
+## 7. Diagnosis — Why Offline Improved but Closed-Loop Collapsed
+
+### 7.1 The contradiction
+Offline metrics improved strongly (val loss −22.5%, dir acc 96.9%) but simulation coverage dropped from 87.2% → 14.4% (0% SR). This is a **train-test distribution mismatch** problem.
+
+### 7.2 Root cause: 6D state covariate shift
+
+The 6D state includes `[pos_x, pos_y, Δx₋₁, Δy₋₁, Δx₋₂, Δy₋₂]` — the last two executed action deltas. During **training**, dims 2-5 come from the expert dataset (ground-truth pushing deltas). During **inference**, dims 2-5 come from the model's own predicted-then-executed actions.
+
+```
+Training distribution:         Inference distribution:
+  Δ₋₁ = expert[t-1]  ✓           Δ₋₁ = model_pred[t-1]  ← different!
+  Δ₋₂ = expert[t-2]  ✓           Δ₋₂ = model_pred[t-2]  ← cascading!
+```
+
+If the model makes even slightly wrong predictions at step 1, the delta history at step 2 is out-of-distribution, causing worse predictions, causing a snowball effect. The 2D position state (Exp1) never has this problem — position always comes from the true environment.
+
+### 7.3 Secondary cause: DiT velocity field instability
+
+The flow steps sensitivity shows **more steps = worse**, which is anomalous for flow matching. A well-trained velocity field should have constant velocity (linear OT-CFM path), so step count shouldn't matter much. The monotonic degradation suggests the DiT's velocity field diverges when integrated over multiple steps — it's accurate at `t≈0` but drifts.
+
+This matters less offline (3-step evaluation) but may amplify the covariate shift problem during closed-loop inference.
+
+### 7.4 The DiT self-attention amplifies covariate shift
+
+The DiT's self-attention makes all 16 action steps co-dependent. If the conditioning (from corrupted 6D state) is wrong, the self-attention propagates the error across all steps simultaneously. The MLP predicted each step independently — wrong conditioning on one step did not corrupt others.
+
+### 7.5 What worked and what didn't
+
+| Component | Offline | Closed-loop |
+|---|---|---|
+| DiT cross-attention to VLM tokens | ✅ better offline | ❓ unclear |
+| 6D state (delta history) | ✅ better offline | ❌ covariate shift |
+| DiT self-attention across steps | ✅ better offline | ❌ error propagation |
+| adaLN conditioning | ✅ better offline | ❌ amplifies bad state |
+
+---
+
+## 8. Next Steps
+
+### Exp2a (recommended) — Ablate 6D state, keep DiT
+Change `state_dim = 2` only. Reuse Exp1 2D-state cache. This isolates whether the **DiT decoder alone** can outperform the MLP baseline.
+
+```bash
+# Update config.py: state_dim=2, state_mean/std to 2D
+# then train:
+python3 train.py --exp 2
+```
+
+### Exp2b — DAgger-style 6D state
+Train with **noise injection into the delta history** to simulate out-of-distribution deltas. Forces the model to be robust to imperfect history. More complex but keeps the 6D state idea.
+
+### Exp3 — Multi-scale layers + 2D state + DiT
+Add layers 14/21/28 fusion only after Exp2a confirms DiT works.
 
 ---
 
