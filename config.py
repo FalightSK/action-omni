@@ -8,16 +8,18 @@ class VLAConfig:
     # ── Paths ────────────────────────────────────────────────────────────────
     dataset_path:      str = "asset/dataset/pusht_dataset"
     model_path:        str = "asset/model/Qwen3.5-0.8B"
-    output_dir:        str = "asset/result_exp2"          # Exp2 separate dir
-    embeddings_cache:  str = "asset/result_exp2/vlm_embeddings.pt"
+    output_dir:        str = "asset/result_exp2"
+    # Reuse Exp1 cache — same layer 28, same 2D state, no re-run needed.
+    embeddings_cache:  str = "asset/result/vlm_embeddings.pt"
 
     # ── Task ─────────────────────────────────────────────────────────────────
     task_text: str = "Push the T-shaped block onto the T-shaped target."
 
     # ── Data dimensions ───────────────────────────────────────────────────────
-    # Experiment B: state expanded from 2D → 6D (agent_xy + 2 prev deltas)
-    # Golden rule: NEVER add block or goal position to state
-    state_dim:  int = 6    # was 2; now [agent_x, agent_y, dΔx₁, dΔy₁, dΔx₂, dΔy₂]
+    # Exp2a: 2D state (agent position only) — same as Exp1.
+    # Drop delta history to eliminate covariate shift.
+    # Golden rule: NEVER add block or goal position to state.
+    state_dim:  int = 2    # agent (x, y) only
     action_dim: int = 2
 
     # ── Action horizons ───────────────────────────────────────────────────────
@@ -27,16 +29,11 @@ class VLAConfig:
     # ── Action representation: relative delta (action - state) ────────────────
     use_relative_actions: bool = True
 
-    # Normalisation for RELATIVE actions
+    # Normalisation
     action_mean: tuple = (-0.871, 0.678)
     action_std:  tuple = (20.187, 20.024)
-
-    # Normalisation for 6D state:
-    #   dims 0-1: agent position (absolute)
-    #   dims 2-3: prev executed delta 1 (same stats as action delta)
-    #   dims 4-5: prev executed delta 2
-    state_mean: tuple = (229.11, 293.31, -0.871,  0.678, -0.871,  0.678)
-    state_std:  tuple = (101.85,  96.49, 20.187, 20.024, 20.187, 20.024)
+    state_mean:  tuple = (229.11, 293.31)
+    state_std:   tuple = (101.85,  96.49)
 
     # ── VLM config (always frozen) ────────────────────────────────────────────
     freeze_vlm:      bool = True
