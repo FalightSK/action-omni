@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Large model assets / caches (per .md manifest these are generated outputs)
+asset/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+vlm_embeddings*.pt
+
+# Generated media / analysis outputs
+*.mp4
+*.gif
+analysis/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
