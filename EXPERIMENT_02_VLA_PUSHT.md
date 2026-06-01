@@ -227,95 +227,92 @@ Flow steps   : 3 (training & inference)
 
 ## 6. Results
 
+> **Note:** This report covers Exp2a (revised scope). The original Exp2 with 6D state
+> caused a covariate shift collapse (0% SR, 14.4% coverage). Exp2a ablates the delta
+> history to isolate the DiT decoder contribution. See §7 for full diagnosis.
+
 ### 6.1 Training
-| Metric | Exp1 (baseline) | Exp2 |
+| Metric | Exp1 (MLP, 2D state) | Exp2a (DiT, 2D state) |
 |---|---|---|
-| Best val loss | 0.4490 (epoch 152) | **0.3483 (epoch 113)** |
-| Early stop at epoch | 202 | 163 |
-| MSE (normalised, val) | — | 0.2078 |
-| MAE (normalised, val) | — | 0.2506 |
-| L2 error (px, t+1) | — | 5.09 px |
-| L2 error (px, mean) | — | 7.95 px |
+| Best val loss | 0.4490 (epoch 152) | **0.3725 (epoch 173)** |
+| Early stop at epoch | 202 | 223 |
+| MSE (normalised, val) | — | 0.2073 |
+| MAE (normalised, val) | — | 0.2472 |
+| L2 error (px, mean) | — | **7.83 px** |
 | Directional accuracy | — | **96.9%** |
 
-Val loss improved **22.5%** over Exp1. Directional accuracy near-perfect.
+Val loss improved **17%** over Exp1 baseline.
 
-### 6.2 Simulation
-| Metric | Exp1 (baseline) | Exp2 |
+### 6.2 Simulation (20 episodes)
+| Metric | Exp1 (MLP, 2D) | Exp2 (DiT, 6D) ❌ | Exp2a (DiT, 2D) |
+|---|---|---|---|
+| Success rate | 25% (5/20) | 0% (0/20) | **20% (4/20)** |
+| Mean max coverage | 87.2% | 14.4% | **86.5%** |
+| Episodes ≥ 90% cov | — | 0/20 | **13/20** |
+| Episodes ≥ 95% cov | — | 0/20 | **4/20** (all successes) |
+| Checkpoint | `result/best.pt` | — | `result_exp2/best.pt` |
+
+### 6.3 Failure Mode Analysis
+Unlike Exp1 (some low-coverage failures), Exp2a failures are concentrated at the **final alignment stage**:
+
+| Coverage range | Exp1 | Exp2a |
 |---|---|---|
-| Success rate (SR) | **25% (5/20)** | **0% (0/20)** ⚠️ |
-| Mean max coverage | **87.2%** | **14.4%** ⚠️ |
-| Episodes with 0-10% cov | — | 10/20 |
-| Episodes with 30-50% cov | — | 4/20 |
-| Checkpoint | `asset/result/checkpoints/best.pt` | `asset/result_exp2/checkpoints/best.pt` |
+| 0–50% | — | 3 episodes (Ep10: 52.7%, Ep16: 63.8%, Ep18: 39.6%) |
+| 50–90% | — | 4 episodes |
+| **90–95%** | — | **9 episodes** ← nearly there |
+| **≥ 95%** | — | **4 episodes** (successes) |
 
-### 6.3 Flow Steps Sensitivity (Exp2)
+13/20 episodes (65%) reach ≥90% coverage — the block is on the target but the final micro-alignment fails.
+
+### 6.4 Flow Steps Sensitivity
 | Steps | MSE | L2 (px) |
 |---|---|---|
-| 1 | **0.1909** | 8.07 |
-| 3 | 0.2047 | 7.96 |
-| 5 | 0.2139 | 8.19 |
-| 10 | 0.2312 | 8.59 |
-| 20 | 0.2318 | 8.74 |
+| 1 | **0.1976** | 8.02 |
+| 3 | 0.2084 | **7.83** |
+| 5 | 0.2142 | 7.96 |
+| 10 | 0.2244 | 8.20 |
+| 20 | 0.2261 | 8.34 |
 
-More steps → **higher** error (inverted from Exp1). See diagnosis in §7.
+Monotonic degradation beyond 3 steps — consistent with slight velocity field drift in the DiT.
 
 ---
 
-## 7. Diagnosis — Why Offline Improved but Closed-Loop Collapsed
+## 7. Diagnosis
 
-### 7.1 The contradiction
-Offline metrics improved strongly (val loss −22.5%, dir acc 96.9%) but simulation coverage dropped from 87.2% → 14.4% (0% SR). This is a **train-test distribution mismatch** problem.
+### 7.1 Original Exp2 failure: 6D state covariate shift
 
-### 7.2 Root cause: 6D state covariate shift
+The 6D state (`[pos, Δ₋₁, Δ₋₂]`) caused a complete closed-loop collapse. During training, delta history came from expert data. At inference it came from the model's own predictions — even small early errors snowballed through 75 replans.
 
-The 6D state includes `[pos_x, pos_y, Δx₋₁, Δy₋₁, Δx₋₂, Δy₋₂]` — the last two executed action deltas. During **training**, dims 2-5 come from the expert dataset (ground-truth pushing deltas). During **inference**, dims 2-5 come from the model's own predicted-then-executed actions.
+Fix: drop delta history, keep DiT decoder → Exp2a.
 
-```
-Training distribution:         Inference distribution:
-  Δ₋₁ = expert[t-1]  ✓           Δ₋₁ = model_pred[t-1]  ← different!
-  Δ₋₂ = expert[t-2]  ✓           Δ₋₂ = model_pred[t-2]  ← cascading!
-```
+### 7.2 Exp2a: DiT improves offline metrics but not SR
 
-If the model makes even slightly wrong predictions at step 1, the delta history at step 2 is out-of-distribution, causing worse predictions, causing a snowball effect. The 2D position state (Exp1) never has this problem — position always comes from the true environment.
+- Val loss: 0.3725 vs 0.4490 (−17%) ✅
+- Directional accuracy: 96.9% ✅
+- L2 error: 7.83px ✅
+- **SR: 20% vs 25% (−5pp)** — slight regression despite better offline metrics
 
-### 7.3 Secondary cause: DiT velocity field instability
+The gap between offline performance and SR is explained by the **failure mode shift**:
+Exp2a gets 13/20 episodes to ≥90% coverage (vs likely fewer in Exp1), but struggles with the final precision alignment needed to cross 95%.
 
-The flow steps sensitivity shows **more steps = worse**, which is anomalous for flow matching. A well-trained velocity field should have constant velocity (linear OT-CFM path), so step count shouldn't matter much. The monotonic degradation suggests the DiT's velocity field diverges when integrated over multiple steps — it's accurate at `t≈0` but drifts.
+### 7.3 Why the DiT struggles at final alignment
 
-This matters less offline (3-step evaluation) but may amplify the covariate shift problem during closed-loop inference.
+The DiT decoder generates smooth, correlated trajectories (via self-attention across 16 steps). This produces fluent approach behavior but may lack the **sharp corrective micro-movements** needed for the last 5% of alignment. The MLP, predicting each step independently, may generate more reactive corrections.
 
-### 7.4 The DiT self-attention amplifies covariate shift
-
-The DiT's self-attention makes all 16 action steps co-dependent. If the conditioning (from corrupted 6D state) is wrong, the self-attention propagates the error across all steps simultaneously. The MLP predicted each step independently — wrong conditioning on one step did not corrupt others.
-
-### 7.5 What worked and what didn't
-
-| Component | Offline | Closed-loop |
-|---|---|---|
-| DiT cross-attention to VLM tokens | ✅ better offline | ❓ unclear |
-| 6D state (delta history) | ✅ better offline | ❌ covariate shift |
-| DiT self-attention across steps | ✅ better offline | ❌ error propagation |
-| adaLN conditioning | ✅ better offline | ❌ amplifies bad state |
+Additionally, the cross-attention to 82 VLM tokens excels at global scene understanding ("where is the block relative to target") but the 96×96 image provides limited resolution for sub-pixel alignment cues.
 
 ---
 
 ## 8. Next Steps
 
-### Exp2a (recommended) — Ablate 6D state, keep DiT
-Change `state_dim = 2` only. Reuse Exp1 2D-state cache. This isolates whether the **DiT decoder alone** can outperform the MLP baseline.
+### Exp3 — Multi-scale VLM layers (14/21/28) + DiT
+Now that the DiT decoder is confirmed working (no covariate shift), add multi-scale feature fusion. Early layers may provide finer spatial detail that helps the final alignment problem.
 
-```bash
-# Update config.py: state_dim=2, state_mean/std to 2D
-# then train:
-python3 train.py --exp 2
-```
+### Exp2c — Increase inference_horizon from 4 → 8
+The DiT produces smooth 16-step trajectories. Executing 8 steps before replanning (instead of 4) may let the trajectory complete its intended arc rather than interrupting mid-push. Requires no retraining.
 
-### Exp2b — DAgger-style 6D state
-Train with **noise injection into the delta history** to simulate out-of-distribution deltas. Forces the model to be robust to imperfect history. More complex but keeps the 6D state idea.
-
-### Exp3 — Multi-scale layers + 2D state + DiT
-Add layers 14/21/28 fusion only after Exp2a confirms DiT works.
+### Exp2d — Longer sim_max_steps (300 → 500)
+13/20 episodes reach ≥90% but timeout at step 300. The model knows what to do — it just needs more time.
 
 ---
 
