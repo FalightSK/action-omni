@@ -1,0 +1,36 @@
+# ── Large binary assets (never commit) ───────────────────────────────────────
+# Ignore everything inside asset/ then whitelist only .gitkeep placeholders
+asset/**
+!asset/
+!asset/result/
+!asset/result/.gitkeep
+!asset/result_exp2/
+!asset/result_exp2/.gitkeep
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# ── Environments ─────────────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+.env
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Editor ───────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Logs / temp ───────────────────────────────────────────────────────────────
+/tmp/
+*.log

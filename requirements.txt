@@ -1,0 +1,23 @@
+# Core
+torch>=2.3.0
+torchvision>=0.18.0
+
+# Transformers — Qwen3.5 requires >=4.51 (install latest if issues arise)
+transformers>=4.51.0
+accelerate>=0.30.0
+
+# Data
+pandas>=2.0.0
+pyarrow>=14.0.0
+numpy>=1.26.0
+
+# Video decoding (AV1 support via system ffmpeg)
+# Run: brew install ffmpeg  (Mac — includes libdav1d for AV1)
+av>=12.0.0
+
+# Image
+Pillow>=10.0.0
+
+# Training utilities
+tqdm>=4.66.0
+einops>=0.8.0
