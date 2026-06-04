@@ -202,11 +202,17 @@ class PushTEmbeddingDataset(Dataset):
     """
 
     def __init__(self, cache_path: str) -> None:
-        cache = torch.load(cache_path, weights_only=True, map_location="cpu")
+        # mmap=True: file stays on disk; pages are loaded lazily per batch access.
+        # For a 12 GB v3 cache this cuts startup from ~20 min to <1 s.
+        # Requires PyTorch >= 2.1 and a zip-format .pt file (default since PT 1.6).
+        cache = torch.load(cache_path, weights_only=True, map_location="cpu", mmap=True)
 
-        self.embeddings: torch.Tensor = cache["embeddings"].float()
-        self.states:     torch.Tensor = cache["states"].float()
-        self.actions:    torch.Tensor = cache["actions"].float()
+        # Keep embeddings in their cached dtype (bfloat16) — mmap'd tensor is a
+        # read-only view of the file.  Cast to float32 per-sample in __getitem__
+        # so only the active batch is ever in float32 RAM.
+        self.embeddings: torch.Tensor = cache["embeddings"]   # bfloat16, mmap'd
+        self.states:     torch.Tensor = cache["states"].float()   # small — load eagerly
+        self.actions:    torch.Tensor = cache["actions"].float()  # small — load eagerly
 
         # v2 cache includes img_masks; v1 does not
         self.img_masks: torch.Tensor | None = cache.get("img_masks", None)
@@ -233,7 +239,9 @@ class PushTEmbeddingDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict:
         item = {
-            "embedding": self.embeddings[idx],   # (seq, 1024) or (1024,)
+            # Cast embedding to float32 here (per-sample), not at load time.
+            # Only the active batch is ever in float32 — not the full cache.
+            "embedding": self.embeddings[idx].float(),   # (seq, 1024) or (n_layers, seq, 1024)
             "state":     self.states[idx],
             "actions":   self.actions[idx],
         }

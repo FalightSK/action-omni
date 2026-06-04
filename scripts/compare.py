@@ -1,14 +1,14 @@
 """
-compare_experiments.py — Fair head-to-head comparison of two experiments.
+scripts/compare.py — Fair head-to-head comparison of two experiments.
 
 Both models run on IDENTICAL environment resets (same seed per episode).
 The environment is reset with the same seed for Exp1 and Exp2a so every
 episode starts from exactly the same initial block and agent position.
 
 Usage:
-  python3 compare_experiments.py
-  python3 compare_experiments.py --episodes 20
-  python3 compare_experiments.py --no-video
+  python3 scripts/compare.py
+  python3 scripts/compare.py --episodes 20
+  python3 scripts/compare.py --no-video
 """
 
 from __future__ import annotations
@@ -22,13 +22,15 @@ import numpy as np
 import torch
 from PIL import Image
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parents[1]   # scripts/ → project root
 sys.path.insert(0, str(ROOT))
 
-from config_loader import get_config
+from configs.registry import get_config_legacy
 from models.vla import VLAModel
-from train import VLATrainModel
-from inference import PushTAgent, run_episode
+from models.vla_train import VLATrainModel
+from envs.pusht_env import PushTAgent, run_episode
+
+def get_config(exp: int): return get_config_legacy(exp, dataset="pusht")
 
 
 def load_agent(exp: int, device: torch.device) -> PushTAgent:

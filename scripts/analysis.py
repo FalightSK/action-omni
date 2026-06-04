@@ -1,5 +1,5 @@
 """
-analysis.py — Comprehensive post-training model analysis.
+scripts/analysis.py — Comprehensive post-training model analysis.
 
 Generates 8 figures saved to <output_dir>/analysis/:
   1. training_curve.png        — train/val loss + gap over epochs
@@ -12,9 +12,9 @@ Generates 8 figures saved to <output_dir>/analysis/:
   8. error_vs_coverage.png     — per-episode simulation coverage
 
 Usage:
-  python3 analysis.py            # Exp2 (default)
-  python3 analysis.py --exp 1    # Exp1 baseline
-  python3 analysis.py --exp 2    # Exp2 DiT
+  python3 scripts/analysis.py            # Exp02a (default)
+  python3 scripts/analysis.py --exp 1    # Exp01 MLP baseline
+  python3 scripts/analysis.py --exp 2    # Exp02a DiT
 """
 
 from __future__ import annotations
@@ -31,12 +31,14 @@ import matplotlib.cm as cm
 from matplotlib.gridspec import GridSpec
 from torch.utils.data import DataLoader, random_split
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parents[1]   # scripts/ → project root
 sys.path.insert(0, str(ROOT))
 
-from config_loader import get_config
-from data.pusht_dataset import PushTEmbeddingDataset
-from train import VLATrainModel
+from configs.registry import get_config_legacy
+from data.pusht import PushTEmbeddingDataset
+from models.vla_train import VLATrainModel
+
+def get_config(exp: int): return get_config_legacy(exp, dataset="pusht")
 
 # ── CLI args ──────────────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser()

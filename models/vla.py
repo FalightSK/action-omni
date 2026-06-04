@@ -55,7 +55,7 @@ from .flow_matching import FlowMatchingDecoder
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Stage 0 — Multi-scale VLM feature fusion (Experiment C)
+# Stage 0 — Multi-scale VLM feature fusion (two variants)
 # ──────────────────────────────────────────────────────────────────────────────
 
 class MultiScaleFusion(nn.Module):
@@ -68,6 +68,12 @@ class MultiScaleFusion(nn.Module):
     Each token gets all n_layers representations concatenated then projected back
     to vlm_dim via a single linear + LayerNorm.  This lets the model use early
     (low-level visual), mid, and final (semantic) Qwen features simultaneously.
+
+    ⚠ WARNING (Exp03 finding): For 3 layers this module has ~3.1M params —
+    96× larger than LoRA (32K).  This capacity imbalance allows the fusion
+    layer to memorise the offline distribution, displacing LoRA and collapsing
+    its contribution from +533% (Exp02a) to +2.8% (Exp03).
+    Use WeightedLayerFusion instead if you want LoRA to remain load-bearing.
     """
 
     def __init__(self, n_layers: int, vlm_dim: int) -> None:
@@ -81,6 +87,39 @@ class MultiScaleFusion(nn.Module):
         B, L, S, D = x.shape
         x = x.permute(0, 2, 1, 3).reshape(B, S, L * D)  # (B, seq, n_layers*vlm_dim)
         return self.norm(self.proj(x))                    # (B, seq, vlm_dim)
+
+
+class WeightedLayerFusion(nn.Module):
+    """
+    Fuses hidden states from multiple VLM layers with learnable scalar weights.
+
+    Input  : (B, n_layers, seq_len, vlm_dim)
+    Output : (B, seq_len, vlm_dim)
+
+    w = softmax(alpha)   where alpha: (n_layers,) learnable logits
+    out = Σ_l  w[l] · x[:, l, :, :]
+
+    Total trainable params: n_layers (just 3 for layers 14/21/28).
+    This is << LoRA capacity (32K), so LoRA remains the dominant task-adaptation
+    mechanism — the exact opposite failure mode of MultiScaleFusion (3.1M params)
+    which displaced LoRA entirely in Exp03.
+
+    Init: zeros → softmax(0,…,0) = uniform weights (each layer starts equally weighted).
+    The model learns to up-weight whichever layer(s) are most informative.
+
+    Hard constraint: fusion capacity must stay < LoRA capacity (< 32K params).
+    n_layers scalar logits trivially satisfies this for any reasonable n_layers.
+    """
+
+    def __init__(self, n_layers: int) -> None:
+        super().__init__()
+        # Init to zeros → uniform weights at start (no layer bias)
+        self.logits = nn.Parameter(torch.zeros(n_layers))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, n_layers, seq, vlm_dim)
+        w = torch.softmax(self.logits, dim=0)          # (n_layers,) — sums to 1
+        return (x * w[None, :, None, None]).sum(dim=1) # (B, seq, vlm_dim)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -242,26 +281,35 @@ class SpatialAwareMLP(nn.Module):
         grid_w:   int,
     ) -> torch.Tensor:            # (B, seq_len, adapter_dim)
         B, S, D = tokens.shape
-        dev = tokens.device
+        dev   = tokens.device
         dtype = tokens.dtype
 
-        # Build per-token position encodings
-        pos_enc = torch.zeros(B, S, self.pos2d.h_enc.shape[-1] * 2,
-                              device=dev, dtype=dtype)
-        img_pe  = self.pos2d(grid_h, grid_w).to(dtype)   # (n_img, pos_dim)
-        txt_pe  = self.pos1d(S).to(dtype)                 # (S, pos_dim)  — upper bound
+        img_pe = self.pos2d(grid_h, grid_w).to(device=dev, dtype=dtype)  # (n_img, pos_dim)
+        txt_pe = self.pos1d(S).to(device=dev, dtype=dtype)               # (S,     pos_dim)
+        n_img  = img_pe.shape[0]
+        n_txt  = txt_pe.shape[0]
 
-        for b in range(B):
-            img_pos = img_mask[b].nonzero(as_tuple=True)[0]  # image token indices
-            txt_pos = (~img_mask[b]).nonzero(as_tuple=True)[0]
+        # Vectorised position encoding — no Python loops, no .nonzero() MPS syncs.
+        #
+        # Strategy: for each token position, compute its sequential index within
+        # its token type using cumsum, then gather the corresponding PE row.
+        #
+        # img_mask = [T T … T  F F … F]
+        #              ↑ 64 img  ↑ 18 txt
+        #
+        # img_cumsum - 1 = [0 1 … 63  63 63 … 63]  (clamped to [0, n_img-1])
+        # txt_cumsum - 1 = [-1-1…-1   0  1 … 17]  (clamped to [0, n_txt-1])
+        #
+        # torch.where picks img_pe[img_idx] for image tokens,
+        #                    txt_pe[txt_idx] for text  tokens.
+        img_idx = (img_mask.long().cumsum(dim=-1) - 1).clamp_(0, n_img - 1)   # (B, S)
+        txt_idx = ((~img_mask).long().cumsum(dim=-1) - 1).clamp_(0, n_txt - 1) # (B, S)
 
-            n_img = min(len(img_pos), grid_h * grid_w)
-            if n_img > 0:
-                pos_enc[b, img_pos[:n_img]] = img_pe[:n_img]
-
-            n_txt = min(len(txt_pos), txt_pe.shape[0])
-            if n_txt > 0:
-                pos_enc[b, txt_pos[:n_txt]] = txt_pe[:n_txt]
+        pos_enc = torch.where(
+            img_mask.unsqueeze(-1),       # (B, S, 1)  broadcast selector
+            img_pe[img_idx],              # (B, S, pos_dim)  image PE
+            txt_pe[txt_idx],              # (B, S, pos_dim)  text  PE
+        )                                 # (B, S, pos_dim)
 
         x = torch.cat([tokens, pos_enc], dim=-1)   # (B, S, vlm_dim + pos_dim)
         return self.mlp(x)                          # (B, S, adapter_dim)
@@ -337,13 +385,22 @@ class VLMTokenAdapter(nn.Module):
         img_grid_h:   int   = 8,
         img_grid_w:   int   = 8,
         n_vlm_layers: int   = 1,
+        fusion_mode:  str   = "linear",   # "linear" (Exp03) | "weighted" (Exp05)
     ) -> None:
         super().__init__()
         self.grid_h = img_grid_h
         self.grid_w = img_grid_w
 
         # Stage 0: multi-scale fusion (only built when n_layers > 1)
-        self.fusion  = MultiScaleFusion(n_vlm_layers, vlm_dim) if n_vlm_layers > 1 else None
+        if n_vlm_layers > 1:
+            if fusion_mode == "weighted":
+                # Exp05: 3 scalar logits — cannot displace LoRA (3 params vs 32K)
+                self.fusion = WeightedLayerFusion(n_vlm_layers)
+            else:
+                # Exp03: Linear(n*d → d) + LN — 3.1M params, ⚠ displaces LoRA
+                self.fusion = MultiScaleFusion(n_vlm_layers, vlm_dim)
+        else:
+            self.fusion = None
 
         self.lora    = PerTokenLoRA(vlm_dim, lora_rank, lora_scale)
         self.spatial = SpatialAwareMLP(vlm_dim, adapter_dim, pos_dim,
@@ -351,10 +408,11 @@ class VLMTokenAdapter(nn.Module):
         self.readout = AttentionReadout(adapter_dim, readout_heads)
 
         n = sum(p.numel() for p in self.parameters())
+        fusion_info = (f"fusion={fusion_mode}" if n_vlm_layers > 1 else "single-layer")
         print(f"   VLMTokenAdapter: {n:,} params  "
               f"(LoRA rank={lora_rank}, adapter_dim={adapter_dim}, "
               f"pos_dim={pos_dim}, readout_heads={readout_heads}, "
-              f"n_vlm_layers={n_vlm_layers})")
+              f"n_vlm_layers={n_vlm_layers}, {fusion_info})")
 
     def forward(
         self,

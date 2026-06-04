@@ -1,11 +1,12 @@
 # ── Large binary assets (never commit) ───────────────────────────────────────
-# Ignore everything inside asset/ then whitelist only .gitkeep placeholders
+# Ignore everything inside asset/ then whitelist .gitkeep placeholders only.
+# New layout: asset/runs/<dataset>/<exp_id>/
 asset/**
 !asset/
-!asset/result/
-!asset/result/.gitkeep
-!asset/result_exp2/
-!asset/result_exp2/.gitkeep
+!asset/runs/
+!asset/runs/**/.gitkeep
+!asset/dataset/
+!asset/dataset/**/.gitkeep
 
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/

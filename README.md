@@ -1,32 +1,135 @@
-# VLA PushT — Qwen3.5-0.8B + OT-CFM Diffusion Policy
+# Frozen VLM as a Generalizable Visual Backbone for Robot Manipulation
 
-A **Vision-Language-Action (VLA)** model that learns to push a T-shaped block
-onto a target zone using a frozen VLM backbone and a conditional flow-matching
-action decoder.
+A **Vision-Language-Action (VLA) system** using a frozen Qwen3.5-0.8B backbone — no robot-data pretraining of the visual backbone, no language-specific finetuning. Only the lightweight adapter and flow-matching decoder are trained (16M params vs 853M frozen).
 
-| | |
-|---|---|
-| **Backbone** | Qwen3.5-0.8B (frozen, bfloat16) |
-| **Decoder** | OT-CFM velocity MLP (3 Euler steps at inference) |
-| **Dataset** | LeRobot PushT — 206 episodes, 25,650 frames |
-| **Hardware** | Apple M1 Mac (MPS backend) |
-| **Golden rule** | State input must **never** include block or goal position |
+**Research goal:** Prove that internet-scale language-visual pretraining generalizes to novel robot manipulation tasks and out-of-distribution visual distributions — without ever finetuning the backbone on robot data.
 
 ---
 
-## Experiments
+## Current Status
 
-| | Exp 1 (baseline) | Exp 2 (B+C) |
+| Phase | Status | Best Result |
 |---|---|---|
-| **State** | 2D agent pos | 6D: pos + 2 prev deltas |
-| **VLM layers** | Layer 28 only | Layers 14, 21, 28 (multi-scale) |
-| **cond_dim** | 514 | 518 |
-| **Trainable params** | 16.2M | 19.4M |
-| **Cache** | `asset/result/vlm_embeddings.pt` (4.0 GB) | `asset/result_exp2/vlm_embeddings.pt` (~12.8 GB) |
-| **Best SR** | 25% (5/20 episodes) | TBD |
-| **Mean coverage** | 87.2% | TBD |
+| **PushT** (architecture validation) | ✅ Complete | **56% SR** (Exp2a, n=50) |
+| **ViT Ablation** (language-visual vs vision-only) | ⏳ Priority 1 | — |
+| **ALOHA** (physical complexity scaling) | ⏳ Priority 2 | — |
+| **Language Table** (language grounding) | ⏳ Priority 3 | — |
+| **Custom OOD** (the headline claim) | ⏳ Priority 4 | — |
 
-Switch between experiments with `--exp 1` or `--exp 2` (default) on any script.
+See `MILESTONES.md` for full progress tracking and `RESEARCH.md` for research plan.
+
+---
+
+## Architecture
+
+```
+PIL Image + Task Text
+       │
+Qwen3.5-0.8B  ❄ FROZEN (853M params, bfloat16)
+       │  hidden states (B, 82, 1024)
+       │
+VLMTokenAdapter  🔥 TRAINABLE (~5.9M params)
+  Stage 1 — PerTokenLoRA         rank=16,  h' = h + 0.1·B(A(h))
+  Stage 2 — SpatialAwareMLP      DINO-style 2D positional encoding → (B, 82, 512)
+  Stage 3 — AttentionReadout     82 tokens → context (B, 512)
+       │  context → adaLN (global)
+       │  tokens  → DiT cross-attention (local, per denoising step)
+       │
+DiTFlowDecoder  🔥 TRAINABLE (10.1M params)
+  16 action tokens, self-attn + cross-attn to 82 VLM tokens
+  OT-CFM: x_t = (1-t)x₀ + tx₁, 3-step Euler inference
+       │
+16 × 2D delta actions → execute 4 steps, replan
+```
+
+**Total trainable: 16M / 869M total = 1.9%**
+
+### Two Conditioning Pathways (Why DiT Beats MLP)
+
+The DiT receives visual information through two parallel channels:
+- **Global (adaLN):** AttentionReadout compresses 82→1 token → modulates every LayerNorm
+- **Local (cross-attention):** All 82 tokens used as K,V per denoising step — each action step queries the full spatial scene
+
+Removing cross-attention: **+261% validation loss**. This bypass around the readout bottleneck is why DiT (56% SR) beats MLP (30% SR).
+
+---
+
+## PushT Results Summary (n=50, final)
+
+| Exp | Architecture | SR | Key finding |
+|---|---|---|---|
+| Exp1 | MLP, layer 24 | 30% | Baseline |
+| Exp2 | DiT + 6D state | 0% | **Covariate shift** — never use action history |
+| **Exp2a** | **DiT + 2D state** | **56% ✅** | Cross-attn is load-bearing mechanism |
+| Exp2c | DiT, ih=8 | 0% | **Hard constraint:** ih must match training |
+| Exp2d | DiT, ms=500 | 42% | MPS variance (p=0.16) |
+| Exp3 | DiT, multi-scale 8/16/24 | 44% | Naive linear fusion invalid |
+
+---
+
+## Mechanistic Findings (Exp2a)
+
+| Component removed | Loss Δ | Interpretation |
+|---|---|---|
+| **LoRA zeroed** | **+533%** | LoRA is 1024→16→1024 task-projection, not correction |
+| **Cross-attention removed** | **+261%** | Per-step spatial querying is load-bearing |
+| adaLN zeroed | +231% | Global scene conditioning critical |
+| Readout → mean-pool | +160% | Readout still needed for adaLN |
+| Spatial PE removed | +12% | Helpful but not the bottleneck |
+
+---
+
+## Hard Constraints (Never Violate)
+
+1. **State = environment observations only** — never action predictions or history
+2. **inference_horizon at inference = inference_horizon at training** — cannot change post-training
+3. **n_eval ≥ 50** before drawing SR conclusions (MPS non-determinism)
+4. **Multi-scale fusion must have less capacity than LoRA** (< 32K params)
+
+---
+
+## Quick Start
+
+### Install
+
+```bash
+brew install ffmpeg
+pip install -r requirements.txt
+```
+
+### Evaluate best model (Exp02a, 56% SR)
+
+```bash
+# Requires checkpoint at asset/runs/pusht/exp02a_dit/checkpoints/best.pt
+python scripts/evaluate.py --dataset pusht --exp exp02a --episodes 50 --no-video
+
+# Single experiment end-to-end (precompute + train + eval):
+bash pipelines/pusht/run_exp.sh exp02a
+
+# Full PushT suite (all experiments):
+bash pipelines/pusht/run_pipeline.sh
+```
+
+### Mechanistic analysis
+
+```bash
+python scripts/mechanistic.py --dataset pusht --exp exp01    # MLP
+python scripts/mechanistic.py --dataset pusht --exp exp02a   # DiT (recommended)
+python scripts/mechanistic.py --dataset pusht --exp exp03    # multi-scale
+```
+
+### Add a new dataset (e.g. ALOHA)
+
+```bash
+# 1. Create config:  configs/aloha/exp01_baseline.py  (inherit BaseVLAConfig)
+# 2. Register it:    configs/registry.py  (add to _REGISTRY dict)
+# 3. Data loader:    data/aloha/dataset.py
+# 4. Env wrapper:    envs/aloha_env.py
+# 5. Run:
+python scripts/precompute.py --dataset aloha --exp exp01
+python scripts/train.py      --dataset aloha --exp exp01
+python scripts/evaluate.py   --dataset aloha --exp exp01 --episodes 50
+```
 
 ---
 
@@ -34,140 +137,68 @@ Switch between experiments with `--exp 1` or `--exp 2` (default) on any script.
 
 ```
 vla_project/
+├── RESEARCH.md              # Research plan, hypotheses, contributions, contingencies
+├── MILESTONES.md            # Phase-by-phase progress tracking
 │
-├── config.py              # Experiment 2 config (current)
-├── config_exp1.py         # Experiment 1 config (frozen snapshot)
-├── config_loader.py       # get_config(exp) factory — used by all scripts
+├── configs/                 # Experiment configs, organized by dataset
+│   ├── base_config.py       #   Shared base (all datasets inherit from this)
+│   ├── registry.py          #   get_config(dataset, exp_id) factory
+│   └── pusht/               #   PushT configs
+│       ├── exp01_mlp.py     #     30% SR (MLP decoder)
+│       ├── exp02a_dit.py    #     56% SR (DiT decoder) ← BEST
+│       ├── exp03_multiscale.py  # 44% SR (multi-scale)
+│       └── exp04_vit.py     #     ViT ablation ← Priority 1
 │
-├── data/
-│   └── pusht_dataset.py   # PushTDataset (raw) + PushTEmbeddingDataset (cached)
+├── data/                    # Dataset loaders, organized by dataset
+│   └── pusht/dataset.py     #   PushTDataset + PushTEmbeddingDataset
 │
-├── models/
-│   ├── vla.py             # MultiScaleFusion, VLMTokenAdapter, VLAModel
-│   └── flow_matching.py   # FlowMatchingDecoder (OT-CFM)
+├── envs/                    # Environment wrappers (pluggable per dataset)
+│   └── pusht_env.py         #   PushTAgent + run_episode()
 │
-├── precompute_embeddings.py   # Step 1 — run VLM once, save token sequences
-├── train.py                   # Step 2 — train adapter + decoder
-├── evaluate.py                # Step 3 — offline metrics
-├── inference.py               # Step 4 — simulation (gym_pusht)
-├── analysis.py                # Analysis plots (8 figures)
-├── architecture_diagram.py    # Full architecture diagram
+├── models/                  # Architecture (shared across all datasets)
+│   ├── vla.py               #   VLAModel, VLMTokenAdapter, PerTokenLoRA
+│   ├── flow_matching.py     #   FlowMatchingDecoder (MLP) + DiTFlowDecoder
+│   └── vla_train.py         #   VLATrainModel (adapter + decoder combined)
 │
-├── EXPERIMENT_01_VLA_PUSHT.md # Experiment 1 report
-├── requirements.txt
-├── run_pipeline.sh
+├── scripts/                 # Unified entry points
+│   ├── precompute.py        #   Step 1: --dataset pusht --exp exp02a
+│   ├── train.py             #   Step 2: --dataset pusht --exp exp02a
+│   ├── evaluate.py          #   Step 3 (sim): --dataset pusht --exp exp02a --episodes 50
+│   ├── offline_eval.py      #   Step 3 (offline metrics): MSE, MAE, L2, directional acc
+│   ├── analysis.py          #   Post-training analysis (8 figures)
+│   ├── mechanistic_analysis.py  #   Component ablations, attention maps, LoRA contribution
+│   ├── mechanistic.py       #   Entry point → dispatches to mechanistic_analysis.py
+│   ├── compare.py           #   Head-to-head comparison across experiments
+│   └── migrate_assets.sh    #   One-time migration from old asset layout
 │
-└── asset/                 # ⚠ NOT in git (too large)
-    ├── model/             # Qwen3.5-0.8B weights   (~1.6 GB)
-    ├── dataset/           # PushT parquet + video
-    ├── result/            # Exp1 cache, checkpoints, analysis
-    └── result_exp2/       # Exp2 cache, checkpoints
+├── pipelines/pusht/         # Pipeline orchestration
+│   ├── run_pipeline.sh      #   Full PushT suite (all experiments)
+│   └── run_exp.sh           #   Single experiment end-to-end
+│
+├── docs/
+│   ├── experiments/pusht/   # Experiment reports (exp01_mlp.md, exp02a_dit.md, …)
+│   └── conclusions/pusht.md # Phase conclusion + mechanistic findings
+│
+# Backward-compat shims (old --exp 1/2/3 commands still work unchanged):
+├── config_loader.py  train.py  inference.py  precompute_embeddings.py
+│
+└── asset/                   # NOT in git (large files)
+    ├── model/Qwen3.5-0.8B/  #   VLM weights (~1.6 GB)
+    ├── dataset/pusht/        #   PushT parquet + video
+    └── runs/pusht/           #   Experiment outputs
+        ├── exp01_mlp/        #     checkpoints, analysis, mechanistic, videos
+        ├── exp02a_dit/       #     (BEST) checkpoints, analysis, mechanistic
+        └── exp03_multiscale/
 ```
 
 ---
 
-## Architecture
+## Key Papers (Related Work)
 
-### VLMTokenAdapter (trainable)
+**Supports frozen backbone concept:** R3M (2022), MVP (2023), DINOv2 for robotics (2023), RoboFlamingo (2023)
 
-```
-Qwen hidden states  (B, n_layers, 82, 1024)
-        │
-  Stage 0 — MultiScaleFusion          [Exp2 only]
-    Linear(n_layers×1024 → 1024) + LayerNorm
-        │
-  Stage 1 — PerTokenLoRA
-    h_i' = h_i + scale * B(A(h_i))   rank=16
-        │
-  Stage 2 — SpatialAwareMLP  (DINO-style)
-    image tokens: cat(h_i', 2D_PE(row,col))
-    text  tokens: cat(h_i', 1D_PE(pos))
-    → MLP(1152 → 512) per token
-        │
-  Stage 3 — AttentionReadout
-    learnable query cross-attends 82 tokens → (B, 512)
-```
+**Opposing — full VLM finetuning:** RT-2 (2023), OpenVLA (2024), π0 (2024), Octo (2023)
 
-### FlowMatchingDecoder (trainable)
+**Critical baseline to beat:** CLIPort (2021) — CLIP-conditioned Diffusion Policy for language-conditioned manipulation
 
-```
-OT-CFM:  x_t = (1-t)·x_0 + t·x_1,   loss = MSE(v_θ, x_1-x_0)
-Inference: 3-step Euler from x_0 ~ N(0,I)
-Input:   [x_t (32D), t (sinusoidal emb), cond (518D)]
-Network: 6 × ResidualBlock(512)
-Output:  velocity field (32D = 16 steps × 2D)
-```
-
----
-
-## Quick Start
-
-### 1. Install dependencies
-
-```bash
-brew install ffmpeg      # AV1 codec
-pip install -r requirements.txt
-```
-
-### 2. Download assets (not in repo)
-
-Place the following in `asset/`:
-- `model/Qwen3.5-0.8B/` — Qwen3.5 model weights
-- `dataset/pusht_dataset/` — LeRobot-format PushT dataset
-
-### 3. Pre-compute VLM embeddings
-
-```bash
-# Experiment 2 (B+C) — requires full re-run (~95 min, ~12.8 GB)
-python precompute_embeddings.py --exp 2
-
-# Experiment 1 — if you only need the 6D state update (< 5 min, no VLM re-run)
-python precompute_embeddings.py --exp 1 --recompute-states
-```
-
-### 4. Train
-
-```bash
-python train.py --exp 2       # Experiment 2 (default)
-python train.py --exp 1       # Re-train Experiment 1
-```
-
-### 5. Evaluate
-
-```bash
-python evaluate.py --exp 2
-python evaluate.py --exp 1    # Reproduces: val_loss=0.4490, L2=9.33px
-```
-
-### 6. Simulate
-
-```bash
-python inference.py --exp 2
-python inference.py --exp 1   # Reproduces: 25% SR, 87.2% coverage
-```
-
----
-
-## Key Findings (Experiment 1)
-
-| Finding | Evidence |
-|---|---|
-| Last-mile stall (13/20) | Model reaches 87–94% coverage then stops |
-| Single attention query locks to center-left | Attention entropy ~3.0 bits; corners ignored |
-| LoRA rank-16 bottleneck | LoRA B gradient 7× LoRA A gradient |
-| Text tokens receive 0% attention | img_mean=0.0156, txt_mean=0.0000 |
-| Mean coverage gap to success: 10.7% | 8/15 failed episodes within 10% of threshold |
-
-Full analysis: `EXPERIMENT_01_VLA_PUSHT.md`
-
----
-
-## Configuration
-
-All hyperparameters live in `config.py` (Exp2) and `config_exp1.py` (Exp1).
-Use `get_config(exp)` from `config_loader.py` — do not import configs directly.
-
-### State design rule
-
-> **The state vector must only contain agent position and action history.**
-> Block position and goal/destination position are **strictly forbidden** as inputs.
+Our contribution: frozen *language-visual* VLM generalizes OOD better than (1) frozen vision-only (ViT), (2) contrastive-aligned (CLIP), and (3) task-specific (Diffusion Policy). Proven via custom OOD dataset — train on 4 colors, test on 6.

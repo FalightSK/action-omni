@@ -1,15 +1,18 @@
 """
-evaluate.py  –  Evaluation pipeline for the VLA model (adapter + decoder).
+scripts/offline_eval.py — Offline evaluation of the VLA model (adapter + decoder).
 
-Metrics: MSE, MAE, Action Error Norm (px), Directional Accuracy,
-         per-horizon breakdown, step-count sensitivity, qualitative check.
+Computes offline metrics on the cached embedding validation set:
+  MSE, MAE, Action Error Norm (px), Directional Accuracy,
+  per-horizon breakdown, step-count sensitivity, qualitative check.
+
+Note: This is OFFLINE evaluation (on the cached val set).
+For SIMULATION evaluation (actual robot episodes), use scripts/evaluate.py.
 
 Usage
 -----
-  python evaluate.py
-  python evaluate.py --all
-  python evaluate.py --checkpoint asset/result/checkpoints/epoch_0100.pt
-  python evaluate.py --flow-steps 3
+  python scripts/offline_eval.py --dataset pusht --exp exp02a
+  python scripts/offline_eval.py --dataset pusht --exp exp01
+  python scripts/offline_eval.py --exp 2 --flow-steps 3   # legacy integer interface
 """
 
 from __future__ import annotations
@@ -20,12 +23,14 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, random_split
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).parents[1]   # scripts/ → project root
 sys.path.insert(0, str(ROOT))
 
-from config_loader import get_config
-from data.pusht_dataset import PushTEmbeddingDataset
-from train import VLATrainModel
+from configs.registry import get_config_legacy, get_config as _registry_get
+from data.pusht import PushTEmbeddingDataset
+from models.vla_train import VLATrainModel
+
+def get_config(exp: int): return get_config_legacy(exp, dataset="pusht")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
