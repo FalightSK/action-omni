@@ -98,6 +98,34 @@ def _run_aloha(cfg, vlm_model, train_model, device, n_ep, save_video, output_pat
     return results
 
 
+def _run_language_table(cfg, vlm_model, train_model, device, n_ep, save_video,
+                        output_path, reward_name):
+    from envs.language_table_env import LanguageTableAgent, make_lt_env, run_episode
+
+    video_dir = Path(cfg.output_dir) / "videos"
+    video_dir.mkdir(parents=True, exist_ok=True)
+
+    agent = LanguageTableAgent(vlm_model, train_model, cfg, device)
+    print(f"\n   Receding-horizon: predict {cfg.action_horizon} steps, "
+          f"execute {cfg.inference_horizon} before re-plan")
+    print(f"   Actions: 2D ee-delta, commanded directly (no integration)")
+    print(f"   Reward factory: {reward_name}  (live instructions; "
+          f"{'OOD held-out verb' if reward_name in ('separate','point') else 'in-distribution'})")
+
+    print("\n[3/4] Starting Language Table sim ...")
+    env = make_lt_env(reward_name, seed=42)
+
+    print(f"\n[4/4] Running {n_ep} episodes ...\n")
+    results = []
+    for ep in range(n_ep):
+        results.append(run_episode(env, agent, cfg, ep, n_ep, save_video, video_dir))
+    try:
+        env.close()
+    except Exception:
+        pass
+    return results
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run simulation evaluation")
     parser.add_argument("--dataset",          type=str, default="pusht",
@@ -116,6 +144,9 @@ def main() -> None:
                         help="Override inference_horizon (WARNING: must match training!)")
     parser.add_argument("--output",           type=str, default=None,
                         help="Override results JSON path")
+    parser.add_argument("--lt-reward",        type=str, default="block2block",
+                        help="Language Table command type / reward factory: "
+                             "block2block|block2absolute (in-dist), separate|point (OOD)")
     args = parser.parse_args()
 
     cfg = get_config(args.dataset, args.exp)
@@ -164,6 +195,11 @@ def main() -> None:
         results = _run_aloha(cfg, vlm_model, train_model, device,
                              n_ep, not args.no_video,
                              Path(args.output) if args.output else None)
+    elif args.dataset == "language_table":
+        results = _run_language_table(cfg, vlm_model, train_model, device,
+                                      n_ep, not args.no_video,
+                                      Path(args.output) if args.output else None,
+                                      args.lt_reward)
     else:
         raise NotImplementedError(f"Eval for {args.dataset!r} not yet implemented. "
                                   f"Add a runner in envs/{args.dataset}_env.py.")

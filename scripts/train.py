@@ -38,6 +38,9 @@ def _get_embedding_dataset(dataset_name: str, cache_path: str):
     if dataset_name == "aloha":
         from data.aloha import AlohaEmbeddingDataset
         return AlohaEmbeddingDataset(cache_path)
+    if dataset_name == "language_table":
+        from data.language_table import LanguageTableEmbeddingDataset
+        return LanguageTableEmbeddingDataset(cache_path)
     raise NotImplementedError(f"Dataset {dataset_name!r} not yet implemented.")
 
 

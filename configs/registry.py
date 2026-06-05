@@ -40,8 +40,9 @@ _REGISTRY: dict[tuple[str, str], str] = {
     ("aloha", "exp01_baseline"): "configs.aloha.exp01_baseline.AlohaExp01",
     ("aloha", "exp02"):          "configs.aloha.exp02_openloop.AlohaExp02OpenLoop",
     ("aloha", "exp02_openloop"): "configs.aloha.exp02_openloop.AlohaExp02OpenLoop",
-    # Language Table (placeholders)
-    # ("language_table", "exp01"): "configs.language_table.exp01_baseline.LTExp01",
+    # Language Table — language-conditioned 2D block pushing
+    ("language_table", "exp01"):          "configs.language_table.exp01_baseline.LTExp01",
+    ("language_table", "exp01_baseline"): "configs.language_table.exp01_baseline.LTExp01",
 }
 
 # Legacy integer → (dataset, exp_id) mapping for backward compat

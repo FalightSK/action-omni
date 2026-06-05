@@ -57,6 +57,9 @@ def _get_raw_dataset(dataset_name: str, cfg):
     if dataset_name == "aloha":
         from data.aloha import AlohaDataset
         return AlohaDataset(cfg)
+    if dataset_name == "language_table":
+        from data.language_table import LanguageTableDataset
+        return LanguageTableDataset(cfg)
     raise NotImplementedError(f"Dataset {dataset_name!r} not yet implemented. "
                               f"Add a loader in data/{dataset_name}/dataset.py.")
 
