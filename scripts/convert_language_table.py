@@ -86,8 +86,9 @@ def classify_instruction(s: str) -> str:
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────────
-def episodes_iter(builder, take: int | None):
-    ds = builder.as_dataset(split="train")
+def episodes_iter(builder, take: int | None, sl: str = ""):
+    split = f"train[{sl}]" if sl else "train"          # sl like "0:30000" for parallel shards
+    ds = builder.as_dataset(split=split)
     if take is not None:
         ds = ds.take(take)
     return ds
@@ -177,8 +178,14 @@ def run_convert(builder, args) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     meta_dir.mkdir(parents=True, exist_ok=True)
     holdout = set(t.strip() for t in args.holdout.split(",") if t.strip())
-    print(f"== CONVERT: target {args.episodes} episodes  holdout={sorted(holdout)} "
-          f"img={args.img_w}x{args.img_h} ==", flush=True)
+    balance = {}
+    for kv in args.balance.split(","):
+        kv = kv.strip()
+        if ":" in kv:
+            t, n = kv.rsplit(":", 1); balance[t.strip()] = int(n)
+    task_counts: Counter = Counter()
+    print(f"== CONVERT: target {args.episodes} eps  holdout={sorted(holdout)}  "
+          f"balance={balance or None}  slice={args.slice or 'all'}  img={args.img_w}x{args.img_h} ==", flush=True)
 
     rows: list[dict] = []
     episodes_meta: list[dict] = []
@@ -204,10 +211,14 @@ def run_convert(builder, args) -> None:
         rows = []
         shard_id += 1
 
-    for ep in episodes_iter(builder, None):
+    for ep in episodes_iter(builder, None, args.slice):
         inst = first_instruction(ep)
         tmpl = classify_instruction(inst)
-        if tmpl in holdout:
+        if balance:
+            if tmpl not in balance or task_counts[tmpl] >= balance[tmpl]:
+                skipped_holdout += 1
+                continue
+        elif tmpl in holdout:
             skipped_holdout += 1
             continue
         ep_index = written_eps
@@ -234,9 +245,16 @@ def run_convert(builder, args) -> None:
         episodes_meta.append({"episode_index": ep_index, "instruction": inst,
                               "template": tmpl, "n_steps": n})
         written_eps += 1
+        if balance:
+            task_counts[tmpl] += 1
         if len(rows) >= args.shard_frames:
             flush_shard()
-        if written_eps >= args.episodes:
+        if balance:
+            if (written_eps % 500 == 0):
+                print(f"  balance progress: {dict(task_counts)}  ({time.time()-t0:.0f}s)", flush=True)
+            if all(task_counts[t] >= c for t, c in balance.items()):
+                break
+        elif written_eps >= args.episodes:
             break
     flush_shard()
 
@@ -276,6 +294,8 @@ def main():
     ap.add_argument("--episodes", type=int, default=50)
     ap.add_argument("--inventory", type=int, default=0, help="if >0: inventory-only over N episodes")
     ap.add_argument("--holdout", default="", help="comma-list of templates to EXCLUDE (OOD split)")
+    ap.add_argument("--slice", default="", help="TFDS split slice e.g. '0:30000' (parallel shards)")
+    ap.add_argument("--balance", default="", help="per-task caps e.g. 'block2block:24136,absolute_location:24136,relative_to_block:24136'")
     ap.add_argument("--img_w", type=int, default=320)
     ap.add_argument("--img_h", type=int, default=180)
     ap.add_argument("--shard_frames", type=int, default=15000)

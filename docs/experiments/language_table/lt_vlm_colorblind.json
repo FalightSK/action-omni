@@ -1,0 +1,38 @@
+{
+  "note": "SmolVLA freezes its VLM (train_expert_only/freeze_vision_encoder); VLM=SmolVLM2-500M first 16 layers, no robotics learning.",
+  "n_crops": 128,
+  "n_scenes": 96,
+  "shorts": {
+    "qwen": "Qwen3.5-0.8B (our frozen VLM)",
+    "smolvla_vlm": "SmolVLM2-500M \u00d716 (= SmolVLA's frozen VLM)",
+    "smolvlm_full": "SmolVLM2-500M \u00d732 (full general VLM)",
+    "raw": "raw pixels (mean RGB)"
+  },
+  "silhouette": {
+    "qwen": {
+      "visual_color": 0.0640378120080525,
+      "visual_shape": 0.08248797163783812,
+      "text_command": 0.3759102389739954,
+      "text_color": -0.011907803264961441,
+      "text_shape": 0.03909933870276229
+    },
+    "smolvla_vlm": {
+      "visual_color": 0.09079112346226972,
+      "visual_shape": 0.0570815657597818,
+      "text_command": 0.39646309036669575,
+      "text_color": -0.01178708042375821,
+      "text_shape": 0.021318897389551825
+    },
+    "smolvlm_full": {
+      "visual_color": 0.045504453746374476,
+      "visual_shape": 0.04179107793856667,
+      "text_command": 0.35806059052827566,
+      "text_color": -0.019048476107590594,
+      "text_shape": 0.03662018949371752
+    },
+    "raw": {
+      "visual_color": 0.1772706858597857,
+      "visual_shape": 0.0023239054786659075
+    }
+  }
+}

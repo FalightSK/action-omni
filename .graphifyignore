@@ -1,0 +1,33 @@
+# graphify memory-graph scope: code + prose only.
+# Exclude the 63 GB data/checkpoint/video lake and binaries.
+asset/
+.git/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+env/
+graphify-out/
+raw/
+.graphify_*
+# binaries / media (skip expensive vision; keep .py + .md + configs text)
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.gif
+*.mp4
+*.mp3
+*.wav
+*.pdf
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.parquet
+*.npz
+*.npy
+*.h5
+*.bin

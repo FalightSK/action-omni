@@ -49,15 +49,20 @@ REWARD_FACTORIES = {
     "separate":       separate_blocks.SeparateBlocksReward,       # OOD (held out)
     "point":          point2block.PointToBlockReward,             # OOD (held out)
 }
-# block2relativelocation class name varies across versions — add if present.
-try:
-    from language_table.environments.rewards import block2relativelocation as _b2r
-    for _n in ("BlockToRelativeLocationReward", "Block2RelativeLocationReward"):
-        if hasattr(_b2r, _n):
-            REWARD_FACTORIES["block2relative"] = getattr(_b2r, _n)
-            break
-except Exception:
-    pass
+# class names vary across versions — add the remaining task families if present.
+for _mod, _names, _key in [
+    ("block2relativelocation", ("BlockToRelativeLocationReward", "Block2RelativeLocationReward"), "block2relative"),
+    ("block2block_relative_location", ("BlockToBlockRelativeLocationReward",), "between"),
+    ("block1_to_corner", ("Block1ToCornerLocationReward", "Block1ToCornerReward"), "corner"),
+]:
+    try:
+        _m = __import__("language_table.environments.rewards." + _mod, fromlist=[_mod])
+        for _n in _names:
+            if hasattr(_m, _n):
+                REWARD_FACTORIES[_key] = getattr(_m, _n)
+                break
+    except Exception:
+        pass
 
 
 def make_lt_env(reward_name: str = "block2block", seed: int = 0):
