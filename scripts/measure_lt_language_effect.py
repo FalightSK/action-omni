@@ -151,8 +151,10 @@ def main():
     print(f"   closed-loop point SR: correct={sr_correct*100:.0f}%  wrong={sr_wrong*100:.0f}%")
 
     # ── figure ──────────────────────────────────────────────────────────────────────
-    fig, (axA, axB, axC) = plt.subplots(1, 3, figsize=(16.5, 5.6))
+    fig, (axA, axB, axC) = plt.subplots(1, 3, figsize=(16.5, 6.0))
+    fig.subplots_adjust(top=0.80, bottom=0.12, wspace=0.26)
     axA.bar([0, 1, 2], [noise, swap, null], color=["#BBBBBB", "#4C72B0", "#DD8452"], edgecolor="black")
+    axA.set_ylim(0, max(noise, swap, null) * 1.25)
     for i, v, lab in [(0, noise, "noise floor"), (1, swap, f"{swap/noise:.1f}x floor"), (2, null, f"{null/noise:.1f}x floor")]:
         axA.annotate(f"{v:.3f}\n{lab if i else ''}", (i, v), textcoords="offset points", xytext=(0, 4), ha="center", fontsize=9.5, fontweight="bold")
     axA.set_xticks([0, 1, 2]); axA.set_xticklabels(["same instr\n(noise floor)", "swapped\ninstruction", "null\ninstruction"], fontsize=9)
@@ -178,15 +180,15 @@ def main():
     axC.grid(axis="y", alpha=0.3)
 
     fig.suptitle(
-        "How much does the instruction drive the model's decision?  "
-        f"Swapping it moves the action {swap/noise:.1f}x the noise floor; the action points at the NAMED block "
-        f"(cos {an:.2f}) far more than at others (cos {ao:.2f}); a WRONG instruction drops point SR {sr_correct*100:.0f}%->{sr_wrong*100:.0f}%.\n"
-        "Language has a strong, causal effect on WHAT the model does — consistent with high text-attention; the weakness is precise placement, not language use.",
-        fontsize=11.5, fontweight="bold", y=1.04)
+        "How much does the instruction drive the model's decision?\n"
+        f"Swap moves the action {swap/noise:.1f}x the noise floor  ·  the action aims at the NAMED block "
+        f"(cos {an:.2f} vs {ao:.2f})  ·  a WRONG instruction drops point SR {sr_correct*100:.0f}%→{sr_wrong*100:.0f}%\n"
+        "Language has a strong, causal effect on WHAT the model does; the weakness is long-range pushing, not language use.",
+        fontsize=12, fontweight="bold", y=0.99)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(OUT, dpi=140, bbox_inches="tight")
     plt.close()
-    print(f"[4/4] saved → {OUT}")
+    print(f"[4/4] saved -> {OUT}")
 
 
 if __name__ == "__main__":

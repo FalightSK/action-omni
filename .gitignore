@@ -36,6 +36,14 @@ Thumbs.db
 /tmp/
 *.log
 
+# ── AI agent artifacts (never commit) ────────────────────────────────────────
+# Claude Code memory, rules, and session files — not part of the codebase
+.claude/
+memory/
+MEMORY.md
+RULES.md
+*.rules.md
+
 # ── Derived / regenerable artifacts (do not commit) ──────────────────────────
 # graphify knowledge-graph + AST cache (rebuild with: graphify update .)
 graphify-out/

@@ -38,10 +38,12 @@ from models.vla_train import VLATrainModel
 OUT = ROOT / "docs/experiments/language_table/lt_rollout_filmstrip.png"
 N_FRAMES = 7
 # (reward factory, require-verb, row label, max attempts to find a success)
+# NB: this run trained on ALL command types (no OOD holdout), so every row below is
+# in-distribution. The rows differ in MANIPULATION TYPE, not train/test split.
 ROWS = [
-    ("block2block", None,       "block2block  [in-distribution]", 30),
-    ("separate",    "separate", "separate  [HELD-OUT verb]",      20),
-    ("point",       "point",    "point  [HELD-OUT verb]",         15),
+    ("block2block", None,       "block2block",  30),
+    ("separate",    "separate", "separate",     20),
+    ("point",       "point",    "point",        15),
 ]
 
 
@@ -110,7 +112,9 @@ def main():
                        "total": len(r["frames"])})
         print(f"   {factory}: success={r['success']}  steps={r['steps']}  | {r['instr'][:50]!r}")
 
-    fig, axes = plt.subplots(len(strips), N_FRAMES, figsize=(2.0 * N_FRAMES, 2.0 * len(strips) + 0.8))
+    nrow = len(strips)
+    fig, axes = plt.subplots(nrow, N_FRAMES, figsize=(2.0 * N_FRAMES, 2.25 * nrow + 1.0))
+    fig.subplots_adjust(top=0.86, bottom=0.04, left=0.07, right=0.99, hspace=0.42, wspace=0.06)
     for ri, s in enumerate(strips):
         for ci in range(N_FRAMES):
             ax = axes[ri, ci]
@@ -120,18 +124,27 @@ def main():
                 ax.text(0.5, 0.08, "SUCCESS", transform=ax.transAxes, ha="center",
                         fontsize=11, fontweight="bold", color="white",
                         bbox=dict(boxstyle="round", facecolor="#2ca02c", edgecolor="black"))
-        tag = "✓ solved" if s["success"] else "best attempt"
-        axes[ri, 0].set_ylabel(f"{s['label']}\n{tag}", fontsize=10, fontweight="bold")
-        fig.text(0.5, 1 - (ri + 0.96) / len(strips) * 0.94 - 0.02,
-                 f"“{s['instr']}”", ha="center", fontsize=10, style="italic", color="#222")
+        # short rotated row label on the left (command type + outcome)
+        tag = "solved ✓" if s["success"] else "best try"
+        axes[ri, 0].set_ylabel(f"{s['label']}\n({tag})", fontsize=11, fontweight="bold")
 
-    fig.suptitle("Qwen-DiT VLA on Language Table — one rollout per command (frame-by-frame)\n"
-                 "Top: a trained command.  Middle/bottom: HELD-OUT verbs ('separate','point') the model never trained on, executed in sim.",
-                 fontsize=12.5, fontweight="bold", y=1.02)
+    # instruction caption centred BELOW each row, positioned from the row's axes box
+    fig.canvas.draw()
+    for ri, s in enumerate(strips):
+        pos0 = axes[ri, 0].get_position()
+        pos_last = axes[ri, -1].get_position()
+        x_mid = (pos0.x0 + pos_last.x1) / 2
+        y_cap = pos0.y0 - 0.018
+        fig.text(x_mid, y_cap, f"“{s['instr']}”", ha="center", va="top",
+                 fontsize=11, style="italic", color="#222")
+
+    fig.suptitle("Qwen-DiT VLA on Language Table — one successful rollout per command type (frame-by-frame)\n"
+                 "All three command types were in the training mix (no held-out split); the rows differ in manipulation type, not train/test.",
+                 fontsize=12.5, fontweight="bold", y=0.96)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(OUT, dpi=140, bbox_inches="tight")
     plt.close()
-    print(f"saved → {OUT}")
+    print(f"saved -> {OUT}")
 
 
 if __name__ == "__main__":

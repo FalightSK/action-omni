@@ -46,6 +46,7 @@ sys.path.insert(0, str(ROOT))
 
 from configs.registry import get_config
 from models.vla import VLAModel
+from data.hdf5_embeddings import is_hdf5_path, HDF5EmbeddingWriter
 
 
 # ── Dataset loader factory ─────────────────────────────────────────────────────
@@ -214,21 +215,41 @@ def main() -> None:
     # (e.g. ALOHA) return their full state vector directly from the loader.
     state_d  = 2 if args.dataset == "pusht" else cfg.state_dim
 
-    est_min = N / 4.5 / 60
-    if n_layers > 1:
-        gb = N * n_layers * S * H_size * 2 / 1e9
-        print(f"\n[3/3] Encoding {N:,} frames → multi-scale (N, {n_layers}, {S}, {H_size})")
-        print(f"      Est. time: {est_min:.0f} min  |  Cache size: ~{gb:.1f} GB")
-        all_embeds = torch.zeros(N, n_layers, S, H_size, dtype=torch.bfloat16)
-    else:
-        gb = N * S * H_size * 2 / 1e9
-        print(f"\n[3/3] Encoding {N:,} frames → single layer (N, {S}, {H_size})")
-        print(f"      Est. time: {est_min:.0f} min  |  Cache size: ~{gb:.1f} GB")
-        all_embeds = torch.zeros(N, S, H_size, dtype=torch.bfloat16)
+    use_hdf5 = is_hdf5_path(out_path)
+    est_min  = N / 4.5 / 60
+    gb = (N * (n_layers if n_layers > 1 else 1) * S * H_size * 2) / 1e9
+    scale_str = (f"multi-scale (N, {n_layers}, {S}, {H_size})" if n_layers > 1
+                 else f"single layer (N, {S}, {H_size})")
+    sink = "HDF5 stream (low RAM)" if use_hdf5 else "in-RAM .pt"
+    print(f"\n[3/3] Encoding {N:,} frames → {scale_str}")
+    print(f"      Est. time: {est_min:.0f} min  |  Cache size: ~{gb:.1f} GB  |  sink: {sink}")
 
-    all_masks   = torch.zeros(N, S,              dtype=torch.bool)
-    all_states  = torch.zeros(N, state_d,         dtype=torch.float32)
-    all_actions = torch.zeros(N, horizon, action_d, dtype=torch.float32)
+    fmt = f"v3_multi_scale_{n_layers}layers" if n_layers > 1 else "v2_full_sequence"
+
+    # HDF5 streaming is incompatible with the PushT post-hoc 6D state build (which
+    # needs the full state/action tensors in RAM). LT/ALOHA never use 6D, so guard.
+    if use_hdf5 and args.dataset == "pusht" and cfg.state_dim > 2:
+        print("[ERROR] HDF5 streaming does not support PushT 6D post-hoc state build. "
+              "Use a .pt cache for that experiment.")
+        sys.exit(1)
+
+    # ── Allocate sink (preallocated tensors for .pt, streaming writer for HDF5) ──
+    writer = None
+    if use_hdf5:
+        writer = HDF5EmbeddingWriter(
+            out_path, N=N, S=S, H=H_size, state_dim=state_d,
+            horizon=horizon, action_dim=action_d, n_layers=n_layers,
+            attrs={"format": fmt, "dataset": args.dataset, "exp_id": args.exp,
+                   "vlm_extract_layers": list(cfg.vlm_extract_layers),
+                   "state_dim": cfg.state_dim, "full_dataset": bool(is_full)})
+    else:
+        if n_layers > 1:
+            all_embeds = torch.zeros(N, n_layers, S, H_size, dtype=torch.bfloat16)
+        else:
+            all_embeds = torch.zeros(N, S, H_size, dtype=torch.bfloat16)
+        all_masks   = torch.zeros(N, S,               dtype=torch.bool)
+        all_states  = torch.zeros(N, state_d,          dtype=torch.float32)
+        all_actions = torch.zeros(N, horizon, action_d, dtype=torch.float32)
 
     ptr = 0
     t0  = time.time()
@@ -242,45 +263,63 @@ def main() -> None:
             if tokens.ndim == 4:
                 actual_S = tokens.shape[2]
                 sl = min(actual_S, S)
-                all_embeds[ptr:ptr+B, :, :sl] = tokens[:, :, :sl].to("cpu", dtype=torch.bfloat16)
             else:
                 actual_S = tokens.shape[1]
                 sl = min(actual_S, S)
-                all_embeds[ptr:ptr+B, :sl] = tokens[:, :sl].to("cpu", dtype=torch.bfloat16)
 
-            all_masks [ptr:ptr+B, :sl] = img_mask[:, :sl].to("cpu")
-            all_states [ptr:ptr+B]     = batch["states"]
-            all_actions[ptr:ptr+B]     = batch["actions"]
+            if use_hdf5:
+                # Build a (B, [L,] S, H) bf16 buffer padded/truncated to S, plus mask.
+                if n_layers > 1:
+                    emb_buf = torch.zeros(B, n_layers, S, H_size, dtype=torch.bfloat16)
+                    emb_buf[:, :, :sl] = tokens[:, :, :sl].to("cpu", dtype=torch.bfloat16)
+                else:
+                    emb_buf = torch.zeros(B, S, H_size, dtype=torch.bfloat16)
+                    emb_buf[:, :sl] = tokens[:, :sl].to("cpu", dtype=torch.bfloat16)
+                mask_buf = torch.zeros(B, S, dtype=torch.bool)
+                mask_buf[:, :sl] = img_mask[:, :sl].to("cpu")
+                writer.write(ptr, emb_buf, mask_buf, batch["states"], batch["actions"])
+            else:
+                if n_layers > 1:
+                    all_embeds[ptr:ptr+B, :, :sl] = tokens[:, :, :sl].to("cpu", dtype=torch.bfloat16)
+                else:
+                    all_embeds[ptr:ptr+B, :sl] = tokens[:, :sl].to("cpu", dtype=torch.bfloat16)
+                all_masks [ptr:ptr+B, :sl] = img_mask[:, :sl].to("cpu")
+                all_states [ptr:ptr+B]     = batch["states"]
+                all_actions[ptr:ptr+B]     = batch["actions"]
             ptr += B
 
     elapsed = time.time() - t0
     print(f"\n   Finished in {elapsed/60:.1f} min  ({N/elapsed:.1f} samples/sec)")
 
-    if args.dataset == "pusht" and cfg.state_dim > 2:
-        print(f"\n   Building {cfg.state_dim}D state with delta history (PushT covariate-shift expts) …")
-        episode_ids = _load_episode_ids(cfg, N)
-        all_states  = _build_6d_states(all_states, all_actions, episode_ids)
-        print(f"   State tensor: {tuple(all_states.shape)}")
-
     # ── Save ───────────────────────────────────────────────────────────────
-    fmt = f"v3_multi_scale_{n_layers}layers" if n_layers > 1 else "v2_full_sequence"
-    payload = {
-        "embeddings":         all_embeds,
-        "img_masks":          all_masks,
-        "states":             all_states,
-        "actions":            all_actions,
-        "n_samples":          N,
-        "full_dataset":       is_full,
-        "format":             fmt,
-        "dataset":            args.dataset,
-        "exp_id":             args.exp,
-        "vlm_extract_layers": list(cfg.vlm_extract_layers),
-        "state_dim":          cfg.state_dim,
-    }
+    if use_hdf5:
+        writer.close()
+        mb = out_path.stat().st_size / 1e6
+        print(f"   Saved → {out_path}  ({mb:.0f} MB, HDF5 streamed)")
+    else:
+        if args.dataset == "pusht" and cfg.state_dim > 2:
+            print(f"\n   Building {cfg.state_dim}D state with delta history (PushT covariate-shift expts) …")
+            episode_ids = _load_episode_ids(cfg, N)
+            all_states  = _build_6d_states(all_states, all_actions, episode_ids)
+            print(f"   State tensor: {tuple(all_states.shape)}")
 
-    torch.save(payload, out_path)
-    mb = out_path.stat().st_size / 1e6
-    print(f"   Saved → {out_path}  ({mb:.0f} MB)")
+        payload = {
+            "embeddings":         all_embeds,
+            "img_masks":          all_masks,
+            "states":             all_states,
+            "actions":            all_actions,
+            "n_samples":          N,
+            "full_dataset":       is_full,
+            "format":             fmt,
+            "dataset":            args.dataset,
+            "exp_id":             args.exp,
+            "vlm_extract_layers": list(cfg.vlm_extract_layers),
+            "state_dim":          cfg.state_dim,
+        }
+        torch.save(payload, out_path)
+        mb = out_path.stat().st_size / 1e6
+        print(f"   Saved → {out_path}  ({mb:.0f} MB)")
+
     if is_full:
         print(f"\n   Full dataset encoded. Run:")
         print(f"   python scripts/train.py --dataset {args.dataset} --exp {args.exp}")
