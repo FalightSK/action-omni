@@ -34,6 +34,15 @@ from data.language_table import resize_frame
 from envs.lt_compat import install_tf_stub
 
 install_tf_stub()  # must precede any language_table import
+
+# The Google language-table sim is a cloned research repo (not pip-installed, to avoid
+# pulling TensorFlow). Add it to sys.path so `import language_table` resolves. Override
+# the location with the LT_SIM_REPO env var if cloned elsewhere.
+import os as _os, sys as _sys
+_LT_REPO = _os.environ.get("LT_SIM_REPO", r"F:\work\capstone\language-table")
+if _LT_REPO and Path(_LT_REPO).exists() and _LT_REPO not in _sys.path:
+    _sys.path.insert(0, _LT_REPO)
+
 from language_table.environments import blocks
 from language_table.environments import language_table as lt_mod
 from language_table.environments.rewards import block2block

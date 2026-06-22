@@ -32,6 +32,13 @@ from models.vla_train import VLATrainModel
 
 
 def _get_embedding_dataset(dataset_name: str, cache_path: str):
+    # HDF5 caches are dataset-agnostic — the lazy on-disk reader handles any dataset
+    # whose embeddings were streamed to .h5/.hdf5 by precompute.py (large datasets
+    # like Language Table 10% that cannot fit the full embedding tensor in RAM).
+    from data.hdf5_embeddings import is_hdf5_path, HDF5EmbeddingDataset
+    if is_hdf5_path(cache_path):
+        return HDF5EmbeddingDataset(cache_path)
+
     if dataset_name == "pusht":
         from data.pusht import PushTEmbeddingDataset
         return PushTEmbeddingDataset(cache_path)
@@ -54,6 +61,8 @@ def main() -> None:
                         help="Override embedding cache path")
     parser.add_argument("--epochs",     type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--fresh", action="store_true",
+                        help="Ignore any last.pt and restart training from epoch 1.")
     args = parser.parse_args()
 
     cfg = get_config(args.dataset, args.exp)
@@ -75,20 +84,32 @@ def main() -> None:
         sys.exit(1)
 
     print("[1/4] Loading embedding dataset …")
+    from data.hdf5_embeddings import is_hdf5_path
+    is_h5    = is_hdf5_path(cache_path)
     full_ds  = _get_embedding_dataset(args.dataset, cache_path)
     val_len  = max(1, int(len(full_ds) * 0.10))
     train_ds, val_ds = random_split(
         full_ds, [len(full_ds) - val_len, val_len],
         generator=torch.Generator().manual_seed(42),
     )
-    # num_workers=0 is optimal for in-memory embedding datasets on MPS/CPU.
-    # pin_memory only helps for CUDA, not MPS unified memory.
+    # In-memory caches (.pt): num_workers=0 is optimal (data already in RAM).
+    # HDF5 caches: reads hit disk per sample, so use multiple workers (each reopens
+    # its own h5 handle) + persistent_workers to overlap disk I/O with GPU compute —
+    # otherwise the GPU starves waiting on single-threaded reads.
+    on_cuda = (device.type == "cuda")
+    if is_h5:
+        # Conservative RAM footprint: 6 workers x prefetch 2 x batch keeps prefetch
+        # buffers modest (a too-large prefetch can exhaust system RAM on big batches).
+        dl_kwargs = dict(num_workers=6, persistent_workers=True,
+                         pin_memory=on_cuda, prefetch_factor=2)
+    else:
+        dl_kwargs = dict(num_workers=0, pin_memory=False)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              shuffle=True,  num_workers=0, pin_memory=False,
-                              drop_last=True)
+                              shuffle=True, drop_last=True, **dl_kwargs)
     val_loader   = DataLoader(val_ds,   batch_size=cfg.batch_size,
-                              shuffle=False, num_workers=0, pin_memory=False)
-    print(f"   Train: {len(train_ds):,}  Val: {len(val_ds):,}  Batch: {cfg.batch_size}")
+                              shuffle=False, **dl_kwargs)
+    print(f"   Train: {len(train_ds):,}  Val: {len(val_ds):,}  Batch: {cfg.batch_size}"
+          f"  | workers: {dl_kwargs['num_workers']}{' (HDF5)' if is_h5 else ''}")
 
     # ── Model ─────────────────────────────────────────────────────────────
     print("\n[2/4] Building VLATrainModel (adapter + decoder) …")
@@ -121,8 +142,35 @@ def main() -> None:
     global_step   = 0
     best_val_loss = float("inf")
     no_improve    = 0
+    start_epoch   = 1
 
-    for epoch in range(1, cfg.num_epochs + 1):
+    # ── Resume from a full-state checkpoint if present (crash resilience) ───────
+    # GPU driver TDRs / power events can kill the process mid-run; last.pt is written
+    # every epoch with model+optimizer+scheduler so a relaunch continues where it
+    # stopped instead of losing all progress. Resume requires the SAME batch size
+    # (OneCycle total_steps is baked in at construction).
+    last_path = ckpt_dir / "last.pt"
+    if last_path.exists() and not args.fresh:
+        ck = torch.load(last_path, map_location=device, weights_only=False)
+        saved_bs = ck.get("batch_size")
+        if saved_bs is not None and saved_bs != cfg.batch_size:
+            print(f"[resume] last.pt batch_size={saved_bs} != current {cfg.batch_size}; "
+                  f"the LR schedule would mismatch. Restarting fresh (use the same "
+                  f"--batch-size to resume).")
+        else:
+            model.load_state_dict(ck["state_dict"])
+            optim.load_state_dict(ck["optim"])
+            scheduler.load_state_dict(ck["scheduler"])
+            start_epoch   = ck["epoch"] + 1
+            best_val_loss = ck.get("best_val_loss", float("inf"))
+            global_step   = ck.get("global_step", 0)
+            no_improve    = ck.get("no_improve", 0)
+            print(f"[resume] continuing from epoch {start_epoch} "
+                  f"(best_val={best_val_loss:.4f}) — last.pt @ epoch {ck['epoch']}")
+    elif args.fresh and last_path.exists():
+        print("[--fresh] ignoring existing last.pt; training from epoch 1.")
+
+    for epoch in range(start_epoch, cfg.num_epochs + 1):
         model.train()
         ep_loss = 0.0
         t0 = time.time()
@@ -175,9 +223,21 @@ def main() -> None:
                        ckpt_dir / "best.pt")
         else:
             no_improve += 1
-            if no_improve >= cfg.early_stop_patience:
-                print(f"\n[Early stop] No improvement for {cfg.early_stop_patience} epochs.")
-                break
+
+        # Full-state checkpoint every epoch for crash-safe resume. Write to a temp
+        # file then atomically replace, so a crash mid-write can't corrupt last.pt.
+        tmp = ckpt_dir / "last.pt.tmp"
+        torch.save({"epoch": epoch, "state_dict": model.state_dict(),
+                    "optim": optim.state_dict(), "scheduler": scheduler.state_dict(),
+                    "best_val_loss": best_val_loss, "global_step": global_step,
+                    "no_improve": no_improve, "batch_size": cfg.batch_size,
+                    "val_loss": avg_val, "cfg": cfg,
+                    "dataset": args.dataset, "exp_id": args.exp}, tmp)
+        tmp.replace(ckpt_dir / "last.pt")
+
+        if no_improve >= cfg.early_stop_patience:
+            print(f"\n[Early stop] No improvement for {cfg.early_stop_patience} epochs.")
+            break
 
         if epoch % cfg.save_every == 0:
             torch.save({"epoch": epoch, "state_dict": model.state_dict(),

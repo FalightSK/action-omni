@@ -64,7 +64,10 @@ class LTExp01(BaseVLAConfig):
     dataset_path:     str = ""                       # alias kept for base-class API
     model_path:       str = "Qwen/Qwen3.5-0.8B"      # resolved from HF cache (offline ok)
     output_dir:       str = "asset/runs/language_table/exp01_baseline"
-    embeddings_cache: str = "asset/runs/language_table/exp01_baseline/vlm_embeddings.pt"
+    # HDF5 (streamed, low-RAM) cache — the 10% subset is far too large to hold the
+    # full embedding tensor in RAM for a single torch.save(.pt). precompute.py and
+    # train.py auto-detect the .h5 extension and stream/lazy-read accordingly.
+    embeddings_cache: str = "asset/runs/language_table/exp01_baseline/vlm_embeddings.h5"
 
     # ── Task (per-episode instruction; this is only a fallback placeholder) ──────
     task_text: str = "push the blocks as instructed"
