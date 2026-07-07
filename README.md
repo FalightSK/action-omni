@@ -175,6 +175,9 @@ vla_project/
 │   ├── run_pipeline.sh      #   Full PushT suite (all experiments)
 │   └── run_exp.sh           #   Single experiment end-to-end
 │
+├── baselines/               # Reference baselines (external policies on benchmarks)
+│   └── smolvla_libero/      #   SmolVLA (450M) → 76.0% SR on LIBERO-Spatial
+│
 ├── docs/
 │   ├── experiments/pusht/   # Experiment reports (exp01_mlp.md, exp02a_dit.md, …)
 │   └── conclusions/pusht.md # Phase conclusion + mechanistic findings
@@ -190,6 +193,18 @@ vla_project/
         ├── exp02a_dit/       #     (BEST) checkpoints, analysis, mechanistic
         └── exp03_multiscale/
 ```
+
+---
+
+## Baselines
+
+Reference baselines (external policies reproduced on standard benchmarks) live under `baselines/`.
+
+- **[SmolVLA on LIBERO](baselines/smolvla_libero/)** — reproduces the SmolVLA (450M) policy on
+  LIBERO-Spatial via `lerobot`'s closed-loop eval: **76.0% SR** (100 rollouts, 10 tasks × 10 eps). A
+  full-finetuning VLA reference point on a manipulation benchmark, with a documented reproducibility
+  caveat (paper's ~87–90% does not reproduce ecosystem-wide) and the hf-libero / robosuite setup
+  gotchas. See its [README](baselines/smolvla_libero/README.md).
 
 ---
 
