@@ -126,6 +126,47 @@ def _run_language_table(cfg, vlm_model, train_model, device, n_ep, save_video,
     return results
 
 
+def _run_libero(cfg, vlm_model, train_model, device, n_ep, save_video, output_path):
+    """LIBERO-Spatial: per-task OffScreenRenderEnv, per-task language instruction,
+    benchmark init states. n_ep is split evenly across the 10 tasks."""
+    from envs.libero_env import (LiberoAgent, get_libero_task, make_libero_env,
+                                 run_episode)
+
+    video_dir = Path(cfg.output_dir) / "videos"
+    if save_video:
+        video_dir.mkdir(parents=True, exist_ok=True)
+
+    agent = LiberoAgent(vlm_model, train_model, cfg, device)
+    print(f"\n   Receding-horizon: predict {cfg.action_horizon} steps, "
+          f"execute {cfg.inference_horizon} before re-plan")
+    print("   Actions: 7-DoF delta-EEF, commanded directly (clip [-1,1])")
+
+    suite = "libero_spatial"
+    _, _, _, n_tasks = get_libero_task(suite, 0)
+    n_tasks = min(n_tasks, 10)
+    eps_per_task = max(1, n_ep // n_tasks)
+    print(f"\n[3/4] LIBERO {suite}: {n_tasks} tasks x {eps_per_task} eps "
+          f"= {n_tasks * eps_per_task} rollouts\n")
+
+    results, ep_global = [], 0
+    for tid in range(n_tasks):
+        task, bddl, init_states, _ = get_libero_task(suite, tid)
+        env = make_libero_env(bddl, cfg.image_size)
+        n = min(eps_per_task, len(init_states))
+        print(f"   task {tid}: {task.language!r}")
+        for k in range(n):
+            r = run_episode(env, agent, cfg, ep_global, n_tasks * eps_per_task,
+                            init_states[k], task.language, save_video, video_dir)
+            r["task_index"] = tid
+            results.append(r)
+            ep_global += 1
+        try:
+            env.close()
+        except Exception:
+            pass
+    return results
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run simulation evaluation")
     parser.add_argument("--dataset",          type=str, default="pusht",
@@ -200,6 +241,10 @@ def main() -> None:
                                       n_ep, not args.no_video,
                                       Path(args.output) if args.output else None,
                                       args.lt_reward)
+    elif args.dataset == "libero":
+        results = _run_libero(cfg, vlm_model, train_model, device,
+                              n_ep, not args.no_video,
+                              Path(args.output) if args.output else None)
     else:
         raise NotImplementedError(f"Eval for {args.dataset!r} not yet implemented. "
                                   f"Add a runner in envs/{args.dataset}_env.py.")

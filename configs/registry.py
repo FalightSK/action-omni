@@ -43,6 +43,9 @@ _REGISTRY: dict[tuple[str, str], str] = {
     # Language Table — language-conditioned 2D block pushing
     ("language_table", "exp01"):          "configs.language_table.exp01_baseline.LTExp01",
     ("language_table", "exp01_baseline"): "configs.language_table.exp01_baseline.LTExp01",
+    # LIBERO — language-conditioned 7-DoF manipulation (libero_spatial)
+    ("libero", "exp01"):          "configs.libero.exp01_baseline.LiberoExp01",
+    ("libero", "exp01_baseline"): "configs.libero.exp01_baseline.LiberoExp01",
 }
 
 # Legacy integer → (dataset, exp_id) mapping for backward compat
