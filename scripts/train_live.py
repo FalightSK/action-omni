@@ -48,14 +48,35 @@ def _raw_dataset(name, cfg):
     raise NotImplementedError(name)
 
 
-def _collate(samples):
-    """Keep PIL images + texts as lists for build_vlm_inputs; stack the rest."""
-    return {
-        "images": [s["image"] for s in samples],
-        "task_texts": [s["task_text"] for s in samples],
-        "state": torch.stack([s["state"] for s in samples]),
-        "actions": torch.stack([s["actions"] for s in samples]),
-    }
+class _CollateVLM:
+    """Runs the (CPU-heavy, ~3s/batch) Qwen2VL processor inside DataLoader workers
+    so it overlaps the GPU step instead of serialising with it. The processor is
+    loaded lazily per worker process (picklable pre-fork)."""
+
+    def __init__(self, model_path: str):
+        self.model_path = model_path
+        self._proc = None
+
+    def __call__(self, samples):
+        if self._proc is None:
+            from transformers import AutoProcessor
+            self._proc = AutoProcessor.from_pretrained(
+                self.model_path, trust_remote_code=True, use_fast=False)  # PIL: 15x faster than torchvision on CPU
+        images = [s["image"] for s in samples]
+        texts = [
+            self._proc.apply_chat_template(
+                [{"role": "user", "content": [
+                    {"type": "image", "image": s["image"]},
+                    {"type": "text",  "text":  s["task_text"]},
+                ]}], tokenize=False, add_generation_prompt=False)
+            for s in samples
+        ]
+        inp = self._proc(text=texts, images=images, padding=True, return_tensors="pt")
+        return {
+            "vlm_inputs": dict(inp),
+            "state": torch.stack([s["state"] for s in samples]),
+            "actions": torch.stack([s["actions"] for s in samples]),
+        }
 
 
 def main():
@@ -64,7 +85,7 @@ def main():
     ap.add_argument("--exp", default="exp01")
     ap.add_argument("--batch", type=int, default=128)   # live path: size for GPU, not cfg
     ap.add_argument("--epochs", type=int, default=None)
-    ap.add_argument("--workers", type=int, default=0)
+    ap.add_argument("--workers", type=int, default=3)  # collate runs the VLM processor: workers overlap it with the GPU step
     ap.add_argument("--fresh", action="store_true")
     args = ap.parse_args()
 
@@ -101,7 +122,8 @@ def main():
     # actions) are tiny, and images move to GPU inside build_vlm_inputs — pinning buys
     # nothing. ponytail: workers default 0 (live-VLM forward is the bottleneck, not
     # PNG decode; >0 forks into pyarrow's thread pool and risks a separate deadlock).
-    dl = dict(batch_size=args.batch, collate_fn=_collate, num_workers=args.workers,
+    dl = dict(batch_size=args.batch, collate_fn=_CollateVLM(cfg.model_path),
+              num_workers=args.workers,
               persistent_workers=args.workers > 0, pin_memory=False)
     tr_sampler = DistributedSampler(train_ds, world, rank, shuffle=True) if ddp else None
     va_sampler = DistributedSampler(val_ds, world, rank, shuffle=False) if ddp else None
@@ -132,7 +154,7 @@ def main():
 
     @torch.no_grad()
     def encode(batch):
-        inputs = vlm.build_vlm_inputs(batch["images"], batch["task_texts"], device)
+        inputs = {k: v.to(device, non_blocking=True) for k, v in batch["vlm_inputs"].items()}
         tokens, img_mask = vlm.encode_vlm(inputs)
         return tokens, img_mask
 
