@@ -14,13 +14,17 @@ a fast GPU) in exchange for zero cache on disk.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, random_split
+from torch.utils.data.distributed import DistributedSampler
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 from configs.registry import get_config
@@ -60,16 +64,28 @@ def main():
     ap.add_argument("--exp", default="exp01")
     ap.add_argument("--batch", type=int, default=128)   # live path: size for GPU, not cfg
     ap.add_argument("--epochs", type=int, default=None)
-    ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--workers", type=int, default=0)
     ap.add_argument("--fresh", action="store_true")
     args = ap.parse_args()
+
+    # Multi-GPU: launch with `torchrun --nproc_per_node=N scripts/train_live.py ...`
+    # Each rank holds its own frozen-VLM copy (no cross-GPU traffic for the encode);
+    # only the small adapter+decoder gradients sync via DDP.
+    ddp = "RANK" in os.environ
+    rank, world = (int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])) if ddp else (0, 1)
+    if ddp:
+        dist.init_process_group("nccl")
+        torch.cuda.set_device(rank)
+    is_main = rank == 0
 
     cfg = get_config(args.dataset, args.exp)
     if args.epochs is not None:
         cfg.num_epochs = args.epochs
     cfg.batch_size = args.batch
-    device = cfg.get_device()
-    print(f"Dataset: {args.dataset} | Exp: {args.exp} | device: {device} | batch: {args.batch}")
+    device = torch.device(f"cuda:{rank}") if ddp else cfg.get_device()
+    if is_main:
+        print(f"Dataset: {args.dataset} | Exp: {args.exp} | device: {device} | "
+              f"batch: {args.batch}/gpu x {world} gpu(s)")
 
     ckpt_dir = Path(cfg.output_dir) / "checkpoints"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -79,18 +95,30 @@ def main():
     n_val = max(1, int(0.1 * len(ds)))
     train_ds, val_ds = random_split(ds, [len(ds) - n_val, n_val],
                                     generator=torch.Generator().manual_seed(42))
+    # pin_memory=False: the collate batch holds lists of PIL images + text strings,
+    # and torch's pin_memory recurses into those non-tensor sequences and deadlocks
+    # on the first fetch (GPU sits at 0% forever). The only real tensors here (state,
+    # actions) are tiny, and images move to GPU inside build_vlm_inputs — pinning buys
+    # nothing. ponytail: workers default 0 (live-VLM forward is the bottleneck, not
+    # PNG decode; >0 forks into pyarrow's thread pool and risks a separate deadlock).
     dl = dict(batch_size=args.batch, collate_fn=_collate, num_workers=args.workers,
-              persistent_workers=args.workers > 0, pin_memory=True)
-    train_loader = DataLoader(train_ds, shuffle=True, drop_last=True, **dl)
-    val_loader = DataLoader(val_ds, shuffle=False, **dl)
-    print(f"   Train {len(train_ds)}  Val {len(val_ds)}  ({len(train_loader)} steps/epoch)")
+              persistent_workers=args.workers > 0, pin_memory=False)
+    tr_sampler = DistributedSampler(train_ds, world, rank, shuffle=True) if ddp else None
+    va_sampler = DistributedSampler(val_ds, world, rank, shuffle=False) if ddp else None
+    train_loader = DataLoader(train_ds, shuffle=tr_sampler is None, drop_last=True,
+                              sampler=tr_sampler, **dl)
+    val_loader = DataLoader(val_ds, shuffle=False, sampler=va_sampler, **dl)
+    if is_main:
+        print(f"   Train {len(train_ds)}  Val {len(val_ds)}  ({len(train_loader)} steps/epoch/gpu)")
 
     # ── Models: frozen VLM (encode) + trainable adapter/decoder ───────────
     vlm = VLAModel(cfg)
     vlm.vlm.to(device).eval()
     model = VLATrainModel(cfg).to(device)
     n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"   Frozen VLM + {n_train:,} trainable params")
+    if is_main:
+        print(f"   Frozen VLM + {n_train:,} trainable params")
+    net = DDP(model, device_ids=[rank]) if ddp else model   # forward through net, ckpt via model
 
     optim = torch.optim.AdamW([
         {"params": model.adapter.parameters()},
@@ -117,48 +145,65 @@ def main():
             scheduler.load_state_dict(ck["scheduler"]); start_epoch = ck["epoch"] + 1
             best_val = ck.get("best_val_loss", float("inf")); gstep = ck.get("global_step", 0)
             no_improve = ck.get("no_improve", 0)
-            print(f"[resume] from epoch {start_epoch} (best_val={best_val:.4f})")
+            if is_main:
+                print(f"[resume] from epoch {start_epoch} (best_val={best_val:.4f})")
 
-    print(f"[train] {cfg.num_epochs} epochs x {len(train_loader)} steps\n")
+    if is_main:
+        print(f"[train] {cfg.num_epochs} epochs x {len(train_loader)} steps/gpu\n")
+    nsteps = len(train_loader)
     for epoch in range(start_epoch, cfg.num_epochs + 1):
-        model.train(); ep_loss = 0.0; t0 = time.time()
-        for batch in train_loader:
+        if tr_sampler is not None:
+            tr_sampler.set_epoch(epoch)
+        net.train(); ep_loss = 0.0; t0 = time.time()
+        for si, batch in enumerate(train_loader):
             embed, img_mask = encode(batch)
             state = batch["state"].to(device); actions = batch["actions"].to(device)
             optim.zero_grad(set_to_none=True)
-            loss = model(embed, state, actions, img_mask)
+            loss = net(embed, state, actions, img_mask)
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             optim.step(); scheduler.step()
             ep_loss += loss.item(); gstep += 1
+            if is_main and si % 25 == 0:   # step-level heartbeat for the long live-VLM loop
+                print(f"  e{epoch} step {si:3d}/{nsteps} loss={loss.item():.4f} "
+                      f"{(time.time()-t0)/(si+1):.2f}s/step", flush=True)
 
-        model.eval(); val_loss = 0.0
+        net.eval(); val_loss = 0.0
         with torch.no_grad():
             for batch in val_loader:
                 embed, img_mask = encode(batch)
-                val_loss += model(embed, batch["state"].to(device),
-                                  batch["actions"].to(device), img_mask).item()
+                val_loss += net(embed, batch["state"].to(device),
+                                batch["actions"].to(device), img_mask).item()
+        if ddp:   # average train/val losses across ranks so best-ckpt choice is global
+            agg = torch.tensor([ep_loss, val_loss], device=device)
+            dist.all_reduce(agg); ep_loss, val_loss = (agg / world).tolist()
         tr, vl = ep_loss / len(train_loader), val_loss / max(1, len(val_loader))
         is_best = vl < best_val
-        tag = " ★ best" if is_best else ""
-        print(f"Epoch {epoch:3d}/{cfg.num_epochs} | train={tr:.4f} val={vl:.4f} | "
-              f"lr={scheduler.get_last_lr()[1]:.2e} | {time.time()-t0:.0f}s{tag}", flush=True)
-
         if is_best:
             best_val, no_improve = vl, 0
-            torch.save({"epoch": epoch, "state_dict": model.state_dict(),
-                        "val_loss": vl, "cfg": cfg, "dataset": args.dataset,
-                        "exp_id": args.exp}, ckpt_dir / "best.pt")
         else:
             no_improve += 1
-        torch.save({"epoch": epoch, "state_dict": model.state_dict(), "optim": optim.state_dict(),
-                    "scheduler": scheduler.state_dict(), "best_val_loss": best_val,
-                    "global_step": gstep, "no_improve": no_improve,
-                    "batch_size": cfg.batch_size}, ckpt_dir / "last.pt")
+        if is_main:
+            tag = " ★ best" if is_best else ""
+            print(f"Epoch {epoch:3d}/{cfg.num_epochs} | train={tr:.4f} val={vl:.4f} | "
+                  f"lr={scheduler.get_last_lr()[1]:.2e} | {time.time()-t0:.0f}s{tag}", flush=True)
+            if is_best:
+                torch.save({"epoch": epoch, "state_dict": model.state_dict(),
+                            "val_loss": vl, "cfg": cfg, "dataset": args.dataset,
+                            "exp_id": args.exp}, ckpt_dir / "best.pt")
+            torch.save({"epoch": epoch, "state_dict": model.state_dict(), "optim": optim.state_dict(),
+                        "scheduler": scheduler.state_dict(), "best_val_loss": best_val,
+                        "global_step": gstep, "no_improve": no_improve,
+                        "batch_size": cfg.batch_size}, ckpt_dir / "last.pt")
         if no_improve >= cfg.early_stop_patience:
-            print(f"[early-stop] no val improvement for {no_improve} epochs"); break
+            if is_main:
+                print(f"[early-stop] no val improvement for {no_improve} epochs")
+            break
 
-    print(f"[done] best val={best_val:.4f}  ckpt={ckpt_dir/'best.pt'}")
+    if is_main:
+        print(f"[done] best val={best_val:.4f}  ckpt={ckpt_dir/'best.pt'}")
+    if ddp:
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

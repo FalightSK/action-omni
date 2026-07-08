@@ -452,8 +452,13 @@ class VLAModel(nn.Module):
 
         # ── Frozen Qwen3.5-0.8B ──────────────────────────────────────────
         print(f"  Loading VLM from {config.model_path} …")
+        # use_fast=False (PIL image processor). Counterintuitively, the transformers
+        # default here is the torchvision "fast" Qwen2VL processor, which is ~15x SLOWER
+        # on CPU for this model (~34s to preprocess a batch of 96 vs 2.3s for PIL), and
+        # stalls the live-VLM trainer — it looks like a hang but is just CPU preprocessing.
+        # Both backends produce identical pixel_values. (Non-deprecated form: backend="pil".)
         self.processor = AutoProcessor.from_pretrained(
-            config.model_path, trust_remote_code=True
+            config.model_path, trust_remote_code=True, use_fast=False
         )
         self.vlm = AutoModel.from_pretrained(
             config.model_path, dtype=torch.bfloat16, trust_remote_code=True,
