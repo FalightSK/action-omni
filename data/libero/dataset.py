@@ -1,24 +1,32 @@
 """
 data/libero/dataset.py
 ──────────────────────
-Raw (precompute-time) dataset for LIBERO-Spatial, backed by lerobot's LeRobotDataset.
+Raw (precompute/train-time) dataset for LIBERO-Spatial.
 
-Satisfies the precompute collate contract (scripts/precompute.py _custom_collate):
+Reads the lerobot-v3 parquet directly with pyarrow (images are PNG bytes stored
+INLINE in the parquet — `video_keys` is empty). This avoids lerobot 0.4.x's
+`LeRobotDataset(episodes=[...])` construction, which hangs for minutes on this
+dataset. Same pattern as the repo's aloha/LT loaders (parquet + pandas), just with
+PNG-bytes images instead of a side-car mp4.
+
+Satisfies the precompute collate contract:
 __getitem__ -> {'image': PIL.Image, 'state': (8,) f32 z-scored, 'actions': (H,7) f32
 z-scored, 'task_text': str, 'idx': int}.
 
-Orientation note: HuggingFaceVLA/libero frames are stored 180-degrees rotated vs the
-live OffScreenRenderEnv render. We train on the DATASET frames as-is; the eval agent
-(envs/libero_env.py) rotates the LIVE render 180 degrees so the two distributions match.
-resize_frame() below is the single source of truth reused by the eval agent.
+Orientation: dataset frames are stored 180deg-rotated vs the live OffScreenRenderEnv
+render. We train on the dataset frames as-is; the eval agent rotates the live render.
 """
 from __future__ import annotations
+
+import glob
+import io
+import os
 
 import numpy as np
 import torch
 from PIL import Image
 
-from configs.libero.exp01_baseline import LIBERO_SPATIAL_TASKS, REPO_ID
+from configs.libero.exp01_baseline import LIBERO_SPATIAL_TASKS, _lerobot_root
 
 EPS = 1e-8
 
@@ -31,54 +39,85 @@ def resize_frame(rgb_uint8: np.ndarray, width: int, height: int) -> Image.Image:
     return img
 
 
-class LiberoDataset(torch.utils.data.Dataset):
-    """Frame-indexed LIBERO-Spatial dataset yielding the precompute item contract."""
+def _spatial_task_indices(root: str):
+    """Map the 10 libero_spatial task strings -> their task_index values.
+    tasks.parquet stores the task STRING as the row index and task_index as a column."""
+    import pandas as pd
+    df = pd.read_parquet(os.path.join(root, "meta", "tasks.parquet"))
+    if "task" in df.columns:                       # (task, task_index) columns
+        mapping = {str(r["task"]): int(r["task_index"]) for _, r in df.iterrows()}
+    else:                                          # task string is the index
+        mapping = {str(k): int(v) for k, v in df["task_index"].items()}
+    wanted = set(LIBERO_SPATIAL_TASKS)
+    idxs = {v for k, v in mapping.items() if k in wanted}
+    assert len(idxs) == len(wanted), f"matched {len(idxs)}/{len(wanted)} spatial tasks"
+    return idxs, {v: k for k, v in mapping.items()}
 
+
+class LiberoDataset(torch.utils.data.Dataset):
     def __init__(self, cfg, cache_frames: bool = True):
-        from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
+        import pyarrow.dataset as pads
 
         self.cfg = cfg
-        self.image_key = cfg.camera_key
         self.horizon = cfg.action_horizon
         self.image_size = cfg.image_size
+        root = cfg.dataset_path or _lerobot_root()
 
-        meta = LeRobotDatasetMetadata(REPO_ID)
-        wanted = set(LIBERO_SPATIAL_TASKS)
-        episodes = [
-            int(e) for e, ts in zip(meta.episodes["episode_index"], meta.episodes["tasks"])
-            if any(t in wanted for t in ts)
-        ]
-        got = {t for ts in meta.episodes["tasks"] for t in ts if t in wanted}
-        assert got == wanted, f"libero_spatial: dataset missing tasks {wanted - got}"
+        spatial_idx, idx2task = _spatial_task_indices(root)
 
-        # delta_timestamps makes lerobot return an H-step action chunk per frame and
-        # clamp past-episode-end steps to the last real action (== repeat-last padding).
-        self.ds = LeRobotDataset(
-            REPO_ID, episodes=episodes,
-            delta_timestamps={"action": [i / meta.fps for i in range(self.horizon)]},
-        )
+        # Read only spatial rows, only the columns we need (filtered pyarrow scan).
+        data_glob = sorted(glob.glob(os.path.join(root, "data", "chunk-*", "file-*.parquet")))
+        assert data_glob, f"no parquet under {root}/data"
+        dset = pads.dataset(data_glob, format="parquet")
+        cols = ["observation.images.image", "observation.state", "action",
+                "episode_index", "index", "task_index"]
+        filt = pads.field("task_index").isin(list(spatial_idx))
+        tbl = dset.to_table(columns=cols, filter=filt)
 
-        # Normalisation comes from the config (loaded from meta/stats.json) so train,
-        # eval, and the cached embeddings all use identical stats.
-        self.a_mean = torch.tensor(cfg.action_mean, dtype=torch.float32)
-        self.a_std = torch.tensor(cfg.action_std, dtype=torch.float32).clamp(min=EPS)
-        self.s_mean = torch.tensor(cfg.state_mean, dtype=torch.float32)
-        self.s_std = torch.tensor(cfg.state_std, dtype=torch.float32).clamp(min=EPS)
+        # Sort by global frame index so episode order + chunking are correct.
+        order = np.argsort(tbl.column("index").to_numpy())
+        self._img = [tbl.column("observation.images.image")[int(i)].as_py() for i in order]
+        self._state = np.stack([np.asarray(tbl.column("observation.state")[int(i)].as_py(), np.float32) for i in order])
+        self._action = np.stack([np.asarray(tbl.column("action")[int(i)].as_py(), np.float32) for i in order])
+        self._ep = tbl.column("episode_index").to_numpy()[order]
+        self._task = [idx2task[int(tbl.column("task_index")[int(i)].as_py())] for i in order]
+        self.N = len(order)
+
+        # Normalisation from the config (loaded from meta/stats.json).
+        self.a_mean = np.asarray(cfg.action_mean, np.float32)
+        self.a_std = np.clip(np.asarray(cfg.action_std, np.float32), EPS, None)
+        self.s_mean = np.asarray(cfg.state_mean, np.float32)
+        self.s_std = np.clip(np.asarray(cfg.state_std, np.float32), EPS, None)
 
     def __len__(self):
-        return len(self.ds)
+        return self.N
+
+    def _decode(self, cell) -> Image.Image:
+        b = cell["bytes"] if isinstance(cell, dict) else cell
+        img = Image.open(io.BytesIO(b)).convert("RGB")
+        if img.size != (self.image_size, self.image_size):
+            img = img.resize((self.image_size, self.image_size))
+        return img
 
     def __getitem__(self, i):
-        s = self.ds[i]
-        img_chw = s[self.image_key]              # [3,256,256] float32 in [0,1]
-        rgb = (img_chw * 255.0).clamp(0, 255).to(torch.uint8).permute(1, 2, 0).numpy()
-        image = resize_frame(rgb, self.image_size, self.image_size)   # dataset frames as-is (no rotation)
-        state = (s["observation.state"].float() - self.s_mean) / self.s_std      # (8,)
-        actions = (s["action"].float() - self.a_mean) / self.a_std               # (H,7)
+        image = self._decode(self._img[i])                      # dataset frame as-is (rotated-stored)
+        state = (self._state[i] - self.s_mean) / self.s_std      # (8,)
+
+        # 16-step action chunk from consecutive frames within the same episode; pad last.
+        ep = self._ep[i]
+        chunk = np.empty((self.horizon, self._action.shape[1]), np.float32)
+        last = self._action[i]
+        for k in range(self.horizon):
+            j = i + k
+            if j < self.N and self._ep[j] == ep:
+                last = self._action[j]
+            chunk[k] = last
+        actions = (chunk - self.a_mean) / self.a_std             # (H,7)
+
         return {
             "image": image,
-            "state": state,
-            "actions": actions,
-            "task_text": s["task"],              # per-frame instruction (language conditioning)
+            "state": torch.from_numpy(state),
+            "actions": torch.from_numpy(actions),
+            "task_text": self._task[i],
             "idx": int(i),
         }
