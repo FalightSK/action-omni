@@ -1,0 +1,7 @@
+# ── Large binaries: regenerable, never commit ────────────────────────────────
+# VLM feature caches (31 GB) — rebuild with scripts/cache2.py + scripts/extract.py
+cache/
+# Trained actor checkpoints (~90 MB each)
+checkpoints/
+# Probe scene set (163 MB) — rebuild with scripts/build_scenes.py
+results/scenes.npz

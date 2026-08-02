@@ -1,0 +1,16 @@
+{
+ "n": 2000,
+ "layers": 33,
+ "pools": [
+  "all",
+  "vis",
+  "text",
+  "instr"
+ ],
+ "suites": [
+  "long",
+  "goal",
+  "object",
+  "spatial"
+ ]
+}
