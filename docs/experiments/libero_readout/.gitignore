@@ -5,3 +5,8 @@ cache/
 checkpoints/
 # Probe scene set (163 MB) — rebuild with scripts/build_scenes.py
 results/scenes.npz
+
+# ── Qwen3.5-0.8B replication caches (regenerable: scripts/cache_qwen.py) ─────
+results/qtrain_feats.npy
+results/qval_feats.npy
+results/qck_*.pt

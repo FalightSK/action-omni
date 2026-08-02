@@ -246,19 +246,108 @@ envs before more GPU helps.
 
 ---
 
+## 6b. Cross-backbone replication: Qwen3.5-0.8B
+
+Run on the local RTX 4070 Ti after the pod was terminated. **Qwen3.5-0.8B is a
+Qwen3-VL-family model with no robot-action supervision** — 24 layers + embedding, d=1024,
+`image-text-to-text`. It is *not* the same family as SmolVLM2, and shares no lineage with
+SmolVLA, so it is a genuine independent backbone.
+
+Closed-loop, LIBERO-Goal, identical actor / protocol / stimulus set:
+
+| backbone | read-out | tap | instruction | success | Wilson 95% CI |
+|---|---|---|---|---|---|
+| Qwen3.5-0.8B | all-token | 12 | original | 163/200 = **81.5%** | [75.5, 86.3] |
+| Qwen3.5-0.8B | all-token | 12 | **goal-swap** | 0/200 = **0.0%** | [0.0, 1.9] |
+| Qwen3.5-0.8B | instr-only | 12 | original | 147/200 = 73.5% | [67.0, 79.1] |
+| Qwen3.5-0.8B | all-token | 0 | original | 150/200 = 75.0% | [68.6, 80.5] |
+
+### Verdict per claim
+
+| # | Claim | SmolVLM2 | Qwen3.5 | Verdict |
+|---|---|---|---|---|
+| 1 | Language is load-bearing | 83.0% → 0.0%, separated | 81.5% → 0.0%, separated | ✅ **REPLICATED** |
+| 2 | Read-out token subset matters | +10.0 pp, CIs **separated** (n=300) | +8.0 pp, CIs **overlap** (n=200) | ⚠️ **direction consistent, NOT independently confirmed** |
+| 3 | Tap depth does not matter | tap0 = tap30 exactly (0.0 pp) | tap0 vs tap12 = 6.5 pp, CIs overlap | ✅ **REPLICATED** (weaker) |
+| 4 | A1 — zero LM layers suffice | 83.0%, equal to best tap | 75.0%, **−6.5 pp** vs best tap | ⚠️ **WEAKER on Qwen** |
+| 5 | Vision states instruction-invariant | `0.000e+00` (33 layers) | `0.000e+00` (25 layers) | ✅ **REPLICATED EXACTLY** |
+| 6 | Token order lifts vision sensitivity | η² 9.8e-09→1.4e-02, ΔR² +0.0592 | η² 1.1e-13→1.2e-02, ΔR² **+0.0739** | ✅ **REPLICATED, larger** |
+| 7 | Validation loss mis-ranks read-outs | instr val 0.527 < all 0.694, yet worse rollout | instr val 0.528 < all 0.687, yet worse rollout | ✅ **REPLICATED** |
+| 8 | instr read-out is more paraphrase-robust | deg_para 1.065 < 1.092 | deg_para **1.173 > 1.068** | ❌ **CONTRADICTED** |
+| 9 | Open-loop proxy is invalid | ranking inverted in both modes | **untestable** — only 2 taps with closed loop | ⬜ **NOT TESTED** |
+
+### Honest reading
+
+**Two claims did not survive intact.**
+
+**Claim 8 is contradicted.** On SmolVLM2 the instruction-only read-out was *more* robust to
+rewording (deg_para 1.065 vs 1.092); on Qwen it is *less* (1.173 vs 1.068). The direction
+reverses. This sub-claim is backbone-specific and should be dropped from any general
+statement about read-out design.
+
+**Claim 2 is not independently confirmed.** The direction replicates (+8.0 pp, same sign and
+similar size as SmolVLM2's +10.0 pp) but at n=200 the Wilson intervals overlap
+([75.5, 86.3] vs [67.0, 79.1]). This is an underpowering problem, not evidence against —
+but it is not confirmation either, and reporting it as such would be wrong. Resolving it
+needs n≈400/arm.
+
+**Claim 9 could not be tested.** The proxy-invalidity finding needs several taps measured in
+closed loop; Qwen has only two (tap 0 and tap 12). Those two happen to be ordered
+*correctly* (ol_mse 0.2461→75.0%, 0.2262→81.5%), i.e. they do **not** reproduce the
+inversion — but n=2 supports no conclusion in either direction. The claim rests solely on
+the SmolVLM2 evidence.
+
+**Claim 4 is weaker than reported.** On SmolVLM2, tap 0 matched the best tap *exactly*
+(249/300 both). On Qwen, tap 0 is 6.5 pp below tap 12. The intervals overlap so no depth
+effect is demonstrated, but "the LM layers contribute nothing" is a stronger reading than
+Qwen supports. The defensible version is: *the embedding layer alone reaches 75–83% and no
+depth effect is statistically demonstrable on either backbone.*
+
+**What is now genuinely solid** — replicated on two unrelated backbones, one of them with an
+exact-zero measurement: the **structural bound** (claim 5), the **token-order intervention**
+(claim 6, larger on Qwen), **language load-bearing** (claim 1), and **validation loss
+mis-ranking read-outs** (claim 7).
+
+### Protocol differences (why Qwen is not a perfect mirror)
+
+| | SmolVLM2 run | Qwen run |
+|---|---|---|
+| training frames | 8,000 | 6,000 |
+| taps swept | 12 | 3 |
+| episodes/arm | 300 | 200 |
+| deep tap compared | 30 (of 32) | 12 (of 24) |
+| hardware | RTX 5090 (rented) | RTX 4070 Ti (local) |
+
+These differences all *reduce* Qwen's statistical power relative to the original run. They do
+not explain the claim-8 reversal, which is a sign flip rather than a width problem.
+
+---
+
 ## 7. What this changes about the paper
 
 The protocol is built to find the best **tap layer**. The data say the tap layer does not matter,
 the read-out's **token subset** does, and the **open-loop proxy planned to measure it is invalid**.
 
-Three claims survive as a coherent paper:
+Three claims survive as a coherent paper — **revised after the Qwen3.5-0.8B replication (§6b)**,
+which confirmed four, weakened one, contradicted one, and left one untested:
 
-1. **A structural bound**: 91.5% of a causal VLA's token budget cannot carry the instruction, with a
-   free intervention (token order) that lifts it — architecture-general.
+1. **A structural bound**, now on two unrelated backbones: ~91.5% of a causal VLA's token budget
+   cannot carry the instruction (`max|Δ| = 0.000e+00` on both SmolVLM2 and Qwen3.5), with a free
+   intervention — token order — lifting vision-token instruction sensitivity by 9–11 orders of
+   magnitude and action decodability by +0.059 / +0.074 R². Strongest result; architecture-general.
 2. **A negative result that matters**: open-loop action error does not order read-out variants by
-   closed-loop success, replicated on two benchmarks (PushT `exp03`, LIBERO-Goal here).
-3. **A frozen-backbone result**: zero LM layers reach 83.0% on LIBERO-Goal with a 3.7 M-param head,
-   and the instruction is fully load-bearing (83.0% → 0.0%).
+   closed-loop success (PushT `exp03`, LIBERO-Goal). ⚠️ **SmolVLM2 evidence only** — Qwen has just
+   two closed-loop taps, too few to test it either way.
+3. **A frozen-backbone result**: the embedding layer alone — zero LM transformer layers — reaches
+   83.0% (SmolVLM2) / 75.0% (Qwen), no depth effect is statistically demonstrable on either, and
+   the instruction is fully load-bearing (83.0% → 0.0%, 81.5% → 0.0%).
+
+**Dropped:** that instruction-only read-out is more paraphrase-robust. It reverses sign between
+backbones (§6b claim 8).
+
+**Not yet earned:** that the read-out token subset *governs* performance. Direction holds on both
+(+10.0 pp, +8.0 pp) but only SmolVLM2 reaches interval separation. Needs n≈400/arm on a second
+backbone before it can be stated as established.
 
 ---
 
