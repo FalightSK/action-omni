@@ -35,9 +35,34 @@ to closed-loop success.
 ### 1.2 Language is fully load-bearing
 
 83.0% → **0.0%** under goal-swap, for both read-outs. All ten LIBERO-Goal tasks share one scene, so
-a swapped instruction can only be followed by *reading it* — and the policy follows it into failing
-the scored task. This is the direct opposite of the LIBERO-PRO report that VLAs emit identical
-action sequences for real, paraphrased and nonsense instructions.
+a swapped instruction can only be acted on by *reading it*.
+
+#### 1.2.1 Does it follow the other instruction, or just break? — tested
+
+A 0.0% arm is consistent with two very different things: the policy performs the **other** task
+(instruction-following), or it simply fails under a mismatched instruction (breakage). **The first
+draft of this report asserted the former without testing it.** It has now been tested.
+
+LIBERO-Goal's ten tasks share one scene, so the policy can run in task *j*'s environment under task
+*k*'s instruction while *k*'s goal predicate is scored by transferring the sim state into *k*'s
+environment each replan step (`scripts/swap_diagnosis.py`).
+
+| n = 100 (10 tasks × 10 eps), Qwen3.5-0.8B, all-token tap 12 | result |
+|---|---|
+| succeeds at the **scored** task *j* | **0/100 = 0.0%** |
+| succeeds at the **swapped** task *k* | **83/100 = 83.0%**  [74.5, 89.1] |
+
+Per task: 10, 9, 7, 10, 6, 8, 10, 6, 7, 10 — every task redirects, none collapses.
+
+**The policy performs the task it is told to perform, at undiminished competence.** 83.0% under a
+swapped instruction is statistically indistinguishable from the 81.5% [75.5, 86.3] it achieves when
+instruction and scoring agree. The instruction does not perturb behaviour — it *selects* which task
+is executed.
+
+This is what makes the LIBERO-PRO contrast legitimate: that work reports VLA policies emitting
+near-identical action sequences for real, paraphrased and nonsense instructions. Here the
+instruction fully determines behaviour, and 0.0% reflects correct obedience to a mis-specified goal
+rather than failure.
 
 ### 1.3 Open-loop action error is an invalid proxy — measured
 
