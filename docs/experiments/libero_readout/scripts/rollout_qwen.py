@@ -33,7 +33,9 @@ from sweep_qwen import Actor, TAPS, W, DIM, MAXI, H, DA
 AP = argparse.ArgumentParser()
 AP.add_argument("--tap", type=int, required=True)
 AP.add_argument("--mode", default="all", choices=["all", "instr"])
-AP.add_argument("--variant", default="orig", choices=["orig", "para1", "swap"])
+AP.add_argument("--variant", default="orig",
+                choices=["orig", "para1", "para2", "para3", "swap"])
+AP.add_argument("--tag", default="qck", help="qck (cond A) | qckmix (cond B)")
 AP.add_argument("--episodes", type=int, default=20, help="per task")
 AP.add_argument("--max-steps", type=int, default=400)
 AP.add_argument("--replan", type=int, default=8)
@@ -49,7 +51,7 @@ proc = AutoProcessor.from_pretrained(MODEL)
 tok = proc.tokenizer
 vlm = AutoModelForImageTextToText.from_pretrained(MODEL, dtype=torch.bfloat16).cuda().eval()
 actor = Actor().cuda().eval()
-actor.load_state_dict(torch.load(os.path.join(RES, f"qck_{A.mode}_tap{A.tap}.pt"),
+actor.load_state_dict(torch.load(os.path.join(RES, f"{A.tag}_{A.mode}_tap{A.tap}.pt"),
                                  map_location="cuda"))
 import pickle
 tasks_map = pickle.load(open(os.path.join(RES, "tasks.pkl"), "rb"))
@@ -72,7 +74,7 @@ def pack(o):
 
 def instr_for(ti_, v):
     if v == "orig":  return tasks_map[ti_]
-    if v == "para1": return V.PARA[ti_][0]
+    if v.startswith("para"): return V.PARA[ti_][int(v[-1]) - 1]
     return tasks_map[V.swap_partner(ti_)]
 
 
@@ -147,6 +149,6 @@ tot = sum(r["success"] for r in results); n = sum(r["n"] for r in results)
 out = dict(model="Qwen3.5-0.8B", tap=A.tap, mode=A.mode, variant=A.variant,
            success_rate=tot / n, n=n, wall_s=round(time.time() - t0, 1), per_task=results)
 print(f"\nSR {tot}/{n} = {100*tot/n:.1f}%")
-fn = os.path.join(RES, f"qroll_{A.mode}_tap{A.tap}_{A.variant}.json")
+fn = os.path.join(RES, f"qroll_{A.tag}_{A.mode}_tap{A.tap}_{A.variant}.json")
 json.dump(out, open(fn, "w"), indent=1)
 print("wrote", fn)

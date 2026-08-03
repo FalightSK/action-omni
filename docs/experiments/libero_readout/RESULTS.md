@@ -9,6 +9,9 @@ Every number below is recomputable from `results/` by `scripts/audit.py`.
 
 ---
 
+> ⚠️ **See §6bb** — the paraphrase-robustness claim based on open-loop `deg_para` is RETRACTED.
+> Closed-loop, an unseen rewording costs 32.5–44.0 pp.
+
 ## 1. Headline closed-loop results (n = 300 per arm)
 
 | read-out | tap | instruction | success | Wilson 95% CI |
@@ -345,6 +348,78 @@ mis-ranking read-outs** (claim 7).
 
 These differences all *reduce* Qwen's statistical power relative to the original run. They do
 not explain the claim-8 reversal, which is a sign flip rather than a width problem.
+
+---
+
+## 6bb. ⚠️ RETRACTION: the policy is NOT paraphrase-robust
+
+Earlier sections of this report cited `deg_para ≈ 1.06–1.09` (open-loop) as evidence that the
+policy is robust to rewording. **That claim is wrong and is retracted here.**
+
+### The design flaw
+
+Training used `run(tr, [0], ...)` — variant 0 only, i.e. **one fixed instruction string per
+task**. With ten fixed strings the model can treat them as ten discrete task IDs and never parse
+language at all. Worse, **no closed-loop arm had ever used a string absent from training**:
+`orig` used the exact training string, and `swap` used another task's training string (only the
+*pairing* was novel). The paraphrases — the only unseen strings — had been measured **open-loop
+only**, via the very proxy §1.3 shows is unreliable.
+
+### Condition A — trained on one phrasing, tested on an unseen one
+
+| read-out, tap 12 | `orig` (seen) | `para1` (**unseen**) | drop |
+|---|---|---|---|
+| all-token | 81.5% [75.5, 86.3] | **49.0%** [41.7, 55.4] | **−32.5 pp** |
+| instruction-only | 73.5% [67.0, 79.1] | **29.5%** [23.2, 35.7] | **−44.0 pp** |
+
+Both **separated**. The policy loses a third to a half of all successes on a reworded
+instruction.
+
+### How badly open-loop understated it
+
+| read-out | open-loop error increase | closed-loop success drop |
+|---|---|---|
+| all-token | +10.1% | **−32.5 pp** |
+| instruction-only | +28.5% | **−44.0 pp** |
+
+A 10% rise in open-loop action error corresponds to losing a third of all successes. This is the
+**third and strongest** demonstration that the open-loop proxy is invalid — and the only one that
+caused a wrong claim to be published in an earlier draft of this report.
+
+### Condition B — does instruction augmentation fix it?
+
+Same 6,000 training samples and identical forward-pass budget; only phrasing diversity changes.
+Training draws from {`orig`, `para1`, `para2`}; **`para3` is held out from training and
+validation entirely.**
+
+| condition | train phrasings | `orig` (seen) | held-out paraphrase | drop |
+|---|---|---|---|---|
+| A | 1 | 81.5% [75.5, 86.3] | 49.0% [41.7, 55.4] | −32.5 pp |
+| B | **3** | 84.5% [78.8, 88.9] | **56.0%** [49.1, 62.7] | −28.5 pp |
+
+**Augmentation does not solve it.** A's [41.7, 55.4] and B's [49.1, 62.7] **overlap**, so the
++7 pp gain is not significant, and the seen-vs-unseen gap barely moves (32.5 → 28.5 pp).
+Augmentation did not hurt in-distribution performance (81.5% → 84.5%).
+
+The open-loop view of condition B makes the mechanism obvious — the model fits the strings it
+saw and nothing transfers:
+
+```
+B, instruction-only tap 12:
+   orig  0.2702 | para1 0.2706 | para2 0.2729     <- all three IN the training mix
+   para3 0.3432                                    <- HELD OUT, +27%
+```
+
+### What this means
+
+**The policy matches memorised strings; it does not read instructions.** The instruction still
+*selects* the task — the 83/100 swap diagnosis (§1.2.1) is closed-loop and stands — but
+"selects among ten memorised strings" is a far weaker capability than "follows a natural-language
+instruction", and earlier drafts let the stronger reading stand.
+
+**Caveat on scope:** three phrasings is very little augmentation. Real instruction-following
+systems train on orders of magnitude more phrasing diversity. What is shown is that 3 phrasings
+is insufficient — **not** that augmentation cannot work.
 
 ---
 
