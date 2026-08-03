@@ -10,3 +10,9 @@ results/scenes.npz
 results/qtrain_feats.npy
 results/qval_feats.npy
 results/qck_*.pt
+
+# ── Mixed-phrasing (condition B) caches + checkpoints ───────────────────────
+results/qmix_feats.npy
+results/qckmix_*.pt
+# stderr noise from parallel rollout launchers
+scripts/*.err
