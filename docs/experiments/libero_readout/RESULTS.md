@@ -348,6 +348,56 @@ not explain the claim-8 reversal, which is a sign flip rather than a width probl
 
 ---
 
+## 6c. External baseline: SmolVLA under a matched harness
+
+Earlier drafts had **no external anchor** — the pod attempts failed on a checkpoint/feature-key
+mismatch and were abandoned. It exists now, and it is run through **our** harness (same benchmark
+init states, same success predicate, same `max_steps`), so suite *and* harness are matched. The
+pod attempt used `lerobot-eval` and was neither.
+
+| policy | trainable params | backbone | LIBERO-Goal | Wilson 95% CI | n |
+|---|---|---|---|---|---|
+| **Ours** (SmolVLM2, all-token tap 30) | **3.7 M** | frozen, no robot data | **83.0%** | [78.3, 86.8] | 300 |
+| **Ours** (Qwen3.5, all-token tap 12) | **3.7 M** | frozen, no robot data | **81.5%** | [75.5, 86.3] | 200 |
+| SmolVLA (`HuggingFaceVLA/smolvla_libero`) | 604.9 M | full finetune, robot-pretrained | 76.0% | [66.8, 83.3] | 100 |
+
+SmolVLA per task: 7, 8, 8, **3**, 9, 9, 6, 10, 9, 7 (weakest on the two-stage
+"open the top drawer and put the bowl inside").
+
+### What this does and does not say
+
+**All three confidence intervals overlap.** The defensible claim is that a 3.7 M-parameter
+read-out on a frozen backbone is **statistically indistinguishable** from a 604.9 M full
+fine-tune on this suite under this harness. It is **not** "we beat SmolVLA", and it should not
+be written that way — the baseline's n=100 gives a ±8 pp interval that comfortably spans our
+point estimates.
+
+**The 76.0% is a sane reproduction, which validates the harness.** The SmolVLA paper reports
+~87–90%; the community reproduction band documented in `baselines/smolvla_libero/README.md` is
+~63–73%. Landing at 76.0% sits just above that band, so the harness is not silently broken —
+which is exactly the failure mode that produced 0% three times during this work.
+
+**Caveats that materially limit the comparison:**
+
+- **n=100 vs our n=300 / n=200.** The baseline is the least-powered arm.
+- **SmolVLA runs at its *most favourable* setting** — native `n_action_steps=1`, replanning
+  every step (2 s/step for a 605 M model). Ours replans every 8 steps. If anything this
+  advantages the baseline.
+- **One suite, one seed.** LIBERO-Goal only.
+- **Different training budgets.** SmolVLA was finetuned on the full LIBERO dataset; our head saw
+  6,000–8,000 LIBERO-Goal frames.
+
+**Three mapping errors had to be fixed before the number meant anything**, each of which
+silently yields ~0%:
+
+| error | fix |
+|---|---|
+| Wrong checkpoint: `lerobot/smolvla_libero` expects `camera1/2/3` + state(6) | `HuggingFaceVLA/smolvla_libero` expects `image`/`image2` + state(8), matching both lerobot's LIBERO env and our convention |
+| Wrist camera orientation never validated | measured against the dataset: **rot180** for *both* cameras (wrist 917 vs 5522 next-best) |
+| Hand-built input batch | use lerobot's `make_pre_post_processors` with the checkpoint's shipped normalizer stats |
+
+---
+
 ## 7. What this changes about the paper
 
 The protocol is built to find the best **tap layer**. The data say the tap layer does not matter,
