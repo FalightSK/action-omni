@@ -1,0 +1,70 @@
+{
+ "model": "SmolVLM2-500M",
+ "tap": 30,
+ "mode": "all",
+ "variant": "para1",
+ "success_rate": 0.465,
+ "n": 200,
+ "per_task": [
+  {
+   "task": "open the middle drawer of the cabinet",
+   "tid": 0,
+   "success": 10,
+   "n": 20
+  },
+  {
+   "task": "put the bowl on the stove",
+   "tid": 1,
+   "success": 19,
+   "n": 20
+  },
+  {
+   "task": "put the wine bottle on top of the cabinet",
+   "tid": 2,
+   "success": 8,
+   "n": 20
+  },
+  {
+   "task": "open the top drawer and put the bowl inside",
+   "tid": 3,
+   "success": 11,
+   "n": 20
+  },
+  {
+   "task": "put the bowl on top of the cabinet",
+   "tid": 4,
+   "success": 1,
+   "n": 20
+  },
+  {
+   "task": "push the plate to the front of the stove",
+   "tid": 5,
+   "success": 0,
+   "n": 20
+  },
+  {
+   "task": "put the cream cheese in the bowl",
+   "tid": 6,
+   "success": 9,
+   "n": 20
+  },
+  {
+   "task": "turn on the stove",
+   "tid": 7,
+   "success": 10,
+   "n": 20
+  },
+  {
+   "task": "put the bowl on the plate",
+   "tid": 8,
+   "success": 16,
+   "n": 20
+  },
+  {
+   "task": "put the wine bottle on the rack",
+   "tid": 9,
+   "success": 9,
+   "n": 20
+  }
+ ]
+}

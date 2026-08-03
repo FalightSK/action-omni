@@ -386,6 +386,24 @@ A 10% rise in open-loop action error corresponds to losing a third of all succes
 **third and strongest** demonstration that the open-loop proxy is invalid — and the only one that
 caused a wrong claim to be published in an earlier draft of this report.
 
+### Replicated on BOTH backbones
+
+The collapse is not a quirk of one model. Both arms run locally under the same harness,
+n=200, max_steps=400, all-token read-out:
+
+| backbone | `orig` (seen) | `para1` (**unseen**) | drop |
+|---|---|---|---|
+| SmolVLM2-500M (tap 30) | 163/200 = 81.5% [75.5, 86.3] | **93/200 = 46.5%** [39.7, 53.4] | **−35.0 pp** |
+| Qwen3.5-0.8B (tap 12) | 163/200 = 81.5% [75.5, 86.3] | **98/200 = 49.0%** [42.2, 55.9] | **−32.5 pp** |
+
+Both separate decisively, and the two collapse magnitudes are statistically indistinguishable
+from one another (the `para1` intervals overlap heavily). Both `orig` arms scoring exactly
+163/200 is coincidence; the pattern is not.
+
+**This makes the retraction architecture-general.** Memorisation follows from training on ten
+fixed instruction strings — it is not a property of any particular backbone, tokenizer or
+image-patching scheme.
+
 ### Condition B — does instruction augmentation fix it?
 
 Same 6,000 training samples and identical forward-pass budget; only phrasing diversity changes.
