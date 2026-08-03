@@ -16,7 +16,6 @@ os.environ.setdefault("HF_HOME", "E:/hf_cache")
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
 
 _tl = torch.load
 torch.load = lambda *a, **k: _tl(*a, **{**k, "weights_only": False})
@@ -40,6 +39,7 @@ AP.add_argument("--variant", default="para1",
 AP.add_argument("--episodes", type=int, default=20)
 AP.add_argument("--max-steps", type=int, default=400)
 AP.add_argument("--replan", type=int, default=8)
+AP.add_argument("--ckpt-tag", default="ck2", help="ck2 (cond A) | ck2mix (cond B)")
 A = AP.parse_args()
 
 MODEL = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
@@ -70,46 +70,7 @@ print(f"norm constants from {len(tr)} train samples | mu[0]={mu[0]:.4f} sd[0]={s
       flush=True)
 
 
-class Block(nn.Module):
-    def __init__(s, dm, dc, nh=6):
-        super().__init__()
-        s.n1, s.n2, s.n3 = (nn.LayerNorm(dm, elementwise_affine=False) for _ in range(3))
-        s.sa = nn.MultiheadAttention(dm, nh, batch_first=True)
-        s.ca = nn.MultiheadAttention(dm, nh, kdim=dc, vdim=dc, batch_first=True)
-        s.mlp = nn.Sequential(nn.Linear(dm, 4 * dm), nn.GELU(), nn.Linear(4 * dm, dm))
-        s.ada = nn.Sequential(nn.SiLU(), nn.Linear(dm, 6 * dm))
-
-    def forward(s, x, c, g, kpm):
-        a, b, cc, dd, e, f = s.ada(g).chunk(6, -1)
-        h = s.n1(x) * (1 + a.unsqueeze(1)) + b.unsqueeze(1)
-        x = x + cc.unsqueeze(1) * s.sa(h, h, h, need_weights=False)[0]
-        h = s.n2(x)
-        x = x + s.ca(h, c, c, key_padding_mask=kpm, need_weights=False)[0]
-        h = s.n3(x) * (1 + dd.unsqueeze(1)) + e.unsqueeze(1)
-        return x + f.unsqueeze(1) * s.mlp(h)
-
-
-class Actor(nn.Module):
-    def __init__(s, dm=384, dc=DIM, nb=6):
-        super().__init__()
-        s.ln = nn.LayerNorm(dc); s.proj = nn.Linear(dc, dc)
-        s.inp = nn.Linear(DA, dm); s.pos = nn.Parameter(torch.zeros(1, H, dm))
-        s.tau = nn.Sequential(nn.Linear(256, dm), nn.SiLU(), nn.Linear(dm, dm))
-        s.st = nn.Linear(8, dm)
-        s.blocks = nn.ModuleList([Block(dm, dc) for _ in range(nb)])
-        s.out = nn.Sequential(nn.LayerNorm(dm), nn.Linear(dm, DA))
-
-    def temb(s, t):
-        f = torch.exp(-math.log(10000) * torch.arange(128, device=t.device) / 128)
-        a = t[:, None] * f[None] * 1000
-        return torch.cat([a.sin(), a.cos()], -1)
-
-    def forward(s, x, t, ctx, state, kpm):
-        c = s.proj(s.ln(ctx)); g = s.tau(s.temb(t)) + s.st(state)
-        h = s.inp(x) + s.pos
-        for b in s.blocks:
-            h = b(h, c, g, kpm)
-        return s.out(h)
+from actor_def import Actor  # shared definition
 
 
 proc = AutoProcessor.from_pretrained(MODEL)
@@ -121,7 +82,7 @@ EOU = tok.convert_tokens_to_ids("<end_of_utterance>")
 FAKE = tok.convert_tokens_to_ids("<fake_token_around_image>")
 
 actor = Actor().cuda().eval()
-ck = os.path.join(CKPT_DIR, f"ck2_{A.mode}_tap{A.tap}_lr0.001.pt")
+ck = os.path.join(CKPT_DIR, f"{A.ckpt_tag}_{A.mode}_tap{A.tap}_lr0.001.pt")
 actor.load_state_dict(torch.load(ck, map_location="cuda"))
 print("loaded", os.path.basename(ck), flush=True)
 bd = benchmark.get_benchmark_dict()["libero_goal"]()
@@ -216,4 +177,4 @@ tot = sum(r["success"] for r in rows); n = sum(r["n"] for r in rows)
 print(f"\nSR {tot}/{n} = {100*tot/n:.1f}%")
 json.dump(dict(model="SmolVLM2-500M", tap=A.tap, mode=A.mode, variant=A.variant,
                success_rate=tot / n, n=n, per_task=rows),
-          open(os.path.join(RES, f"sroll_{A.mode}_tap{A.tap}_{A.variant}.json"), "w"), indent=1)
+          open(os.path.join(RES, f"sroll_{A.ckpt_tag}_{A.mode}_tap{A.tap}_{A.variant}.json"), "w"), indent=1)

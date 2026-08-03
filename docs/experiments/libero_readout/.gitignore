@@ -16,3 +16,7 @@ results/qmix_feats.npy
 results/qckmix_*.pt
 # stderr noise from parallel rollout launchers
 scripts/*.err
+
+# SmolVLM2 mixed-phrasing cache (regenerable: scripts/cache_smolvlm_mix.py)
+results/smix_feats.npy
+checkpoints/ck2mix_*.pt

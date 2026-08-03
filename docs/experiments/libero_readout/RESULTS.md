@@ -415,9 +415,38 @@ validation entirely.**
 | A | 1 | 81.5% [75.5, 86.3] | 49.0% [41.7, 55.4] | −32.5 pp |
 | B | **3** | 84.5% [78.8, 88.9] | **56.0%** [49.1, 62.7] | −28.5 pp |
 
-**Augmentation does not solve it.** A's [41.7, 55.4] and B's [49.1, 62.7] **overlap**, so the
-+7 pp gain is not significant, and the seen-vs-unseen gap barely moves (32.5 → 28.5 pp).
+**On Qwen, augmentation does not solve it.** A's [41.7, 55.4] and B's [49.1, 62.7] **overlap**,
+so the +7 pp gain is not significant, and the seen-vs-unseen gap barely moves (32.5 → 28.5 pp).
 Augmentation did not hurt in-distribution performance (81.5% → 84.5%).
+
+#### ⚠️ But the two backbones DIVERGE on this — corrected
+
+Condition B was initially run on Qwen only, and "augmentation does not solve it" was written from
+that. Replicating on SmolVLM2 **partly reverses it**:
+
+| backbone | condition | `orig` (seen) | held-out paraphrase | gap | verdict |
+|---|---|---|---|---|---|
+| SmolVLM2 | A (1 phrasing) | 81.5% [75.5, 86.3] | 46.5% [39.7, 53.4] | **−35.0 pp** | separated |
+| SmolVLM2 | **B (3 phrasings)** | 77.5% [71.2, 82.7] | **68.0%** [61.2, 74.1] | **−9.5 pp** | **overlap** |
+| Qwen3.5 | A (1 phrasing) | 81.5% [75.5, 86.3] | 49.0% [42.2, 55.9] | −32.5 pp | separated |
+| Qwen3.5 | B (3 phrasings) | 84.5% [78.8, 88.9] | 56.0% [49.1, 62.7] | −28.5 pp | separated |
+
+**On SmolVLM2 augmentation works.** Held-out performance rises 46.5% → **68.0%** (+21.5 pp,
+intervals [39.7, 53.4] vs [61.2, 74.1] — **separated**, a real effect), and the seen-vs-unseen gap
+falls to −9.5 pp with **overlapping** intervals, i.e. no longer demonstrable.
+
+**On Qwen it does not.** +7.0 pp, intervals overlap, gap stays −28.5 pp and separated.
+
+So the correct statement is **not** "instruction augmentation fails". It is: *three phrasings
+suffice to close the generalisation gap on SmolVLM2 but not on Qwen3.5.* The collapse under
+condition A is architecture-general; **the fix is not.**
+
+⚠️ **Confound — the backbones are not perfectly matched.** SmolVLM2 trained on 8,000 samples at
+tap 30; Qwen on 6,000 at tap 12. Each backbone's own A-vs-B comparison *is* matched (same sample
+count, same tap, same actor, same schedule — only phrasing diversity differs), so the
+within-backbone conclusions hold. But the *cross-backbone* difference in effect size (+21.5 vs
++7.0 pp) cannot be attributed to the backbone alone; training-set size and tap depth also differ.
+Resolving that needs Qwen re-run at 8,000 samples.
 
 The open-loop view of condition B makes the mechanism obvious — the model fits the strings it
 saw and nothing transfers:
