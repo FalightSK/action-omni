@@ -1,0 +1,77 @@
+{
+ "n": 100,
+ "scored": 0,
+ "swapped": 83,
+ "per_task": [
+  {
+   "task": "open the middle drawer of the cabinet",
+   "swap_instruction": "put the wine bottle on top of the cabinet",
+   "n": 10,
+   "scored_task_success": 0,
+   "swapped_task_success": 10
+  },
+  {
+   "task": "put the bowl on the stove",
+   "swap_instruction": "open the top drawer and put the bowl inside",
+   "n": 10,
+   "scored_task_success": 0,
+   "swapped_task_success": 9
+  },
+  {
+   "task": "put the wine bottle on top of the cabinet",
+   "swap_instruction": "open the middle drawer of the cabinet",
+   "n": 10,
+   "scored_task_success": 0,
+   "swapped_task_success": 7
+  },
+  {
+   "task": "open the top drawer and put the bowl inside",
+   "swap_instruction": "put the bowl on the stove",
+   "n": 10,
+   "scored_task_success": 0,
+   "swapped_task_success": 10
+  },
+  {
+   "task": "put the bowl on top of the cabinet",
+   "swap_instruction": "put the cream cheese in the bowl",
+   "n": 10,
+   "scored_task_success": 0,
+   "swapped_task_success": 6
+  },
+  {
+   "task": "push the plate to the front of the stove",
+   "swap_instruction": "put the bowl on the plate",
+   "n": 10,
+   "scored_task_success": 0,
+   "swapped_task_success": 8
+  },
+  {
+   "task": "put the cream cheese in the bowl",
+   "swap_instruction": "put the bowl on top of the cabinet",
+   "n": 10,
+   "scored_task_success": 0,
+   "swapped_task_success": 10
+  },
+  {
+   "task": "turn on the stove",
+   "swap_instruction": "put the wine bottle on the rack",
+   "n": 10,
+   "scored_task_success": 0,
+   "swapped_task_success": 6
+  },
+  {
+   "task": "put the bowl on the plate",
+   "swap_instruction": "push the plate to the front of the stove",
+   "n": 10,
+   "scored_task_success": 0,
+   "swapped_task_success": 7
+  },
+  {
+   "task": "put the wine bottle on the rack",
+   "swap_instruction": "turn on the stove",
+   "n": 10,
+   "scored_task_success": 0,
+   "swapped_task_success": 10
+  }
+ ]
+}

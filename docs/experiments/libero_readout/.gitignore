@@ -1,0 +1,22 @@
+# ── Large binaries: regenerable, never commit ────────────────────────────────
+# VLM feature caches (31 GB) — rebuild with scripts/cache2.py + scripts/extract.py
+cache/
+# Trained actor checkpoints (~90 MB each)
+checkpoints/
+# Probe scene set (163 MB) — rebuild with scripts/build_scenes.py
+results/scenes.npz
+
+# ── Qwen3.5-0.8B replication caches (regenerable: scripts/cache_qwen.py) ─────
+results/qtrain_feats.npy
+results/qval_feats.npy
+results/qck_*.pt
+
+# ── Mixed-phrasing (condition B) caches + checkpoints ───────────────────────
+results/qmix_feats.npy
+results/qckmix_*.pt
+# stderr noise from parallel rollout launchers
+scripts/*.err
+
+# SmolVLM2 mixed-phrasing cache (regenerable: scripts/cache_smolvlm_mix.py)
+results/smix_feats.npy
+checkpoints/ck2mix_*.pt
