@@ -52,11 +52,12 @@ class HDF5EmbeddingDataset(Dataset):
     this is safe with DataLoader num_workers>0 (each worker reopens its own handle).
     """
 
-    def __init__(self, cache_path: str) -> None:
+    def __init__(self, cache_path: str, expect_layers: tuple | None = None) -> None:
         import h5py  # local import so non-HDF5 paths don't require h5py
 
         self.cache_path = str(cache_path)
         self._h5: "h5py.File | None" = None
+        self._expect_layers = expect_layers
 
         # Read small tensors + metadata eagerly; keep embeddings/masks on disk.
         with h5py.File(self.cache_path, "r") as f:
@@ -68,6 +69,26 @@ class HDF5EmbeddingDataset(Dataset):
             self._embed_ndim = f["embeddings"].ndim
             embed_shape = tuple(f["embeddings"].shape[1:])
             fmt = f.attrs.get("format", "hdf5")
+            cached_layers = f.attrs.get("vlm_extract_layers", None)
+            self.cached_layers = (
+                tuple(int(x) for x in np.atleast_1d(cached_layers))
+                if cached_layers is not None else None
+            )
+
+        # A cache built at one layer is indistinguishable from one built at
+        # another once loaded — same shapes, same dtype. Without this check a
+        # depth ablation silently trains every configuration on whichever layer
+        # happened to be cached first, and reports "depth doesn't matter".
+        if self._expect_layers is not None and self.cached_layers is not None:
+            want = tuple(int(x) for x in self._expect_layers)
+            if want != self.cached_layers:
+                raise ValueError(
+                    f"Embedding cache layer mismatch for {self.cache_path}:\n"
+                    f"  cache was built with vlm_extract_layers={self.cached_layers}\n"
+                    f"  this run is configured for      vlm_extract_layers={want}\n"
+                    f"Delete or rename the cache and re-run precompute, or point "
+                    f"embeddings_cache at a layer-specific file."
+                )
 
         if self._embed_ndim == 4:
             kind = "v3 (multi-scale, HDF5)"

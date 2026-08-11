@@ -55,3 +55,7 @@ docs/experiments/**/videos/
 # debug / smoke overlays
 docs/experiments/**/_proj_check.png
 docs/experiments/**/_smoke_frame.png
+
+# Upstream LIBERO checkout — installed as a dependency, not vendored source.
+# Staged as a bare gitlink otherwise, which breaks fresh clones.
+third_party/

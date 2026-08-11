@@ -30,11 +30,11 @@ from configs.base_config import BaseVLAConfig
 @dataclass
 class PushTExp02aDiT(BaseVLAConfig):
     # ── Paths ─────────────────────────────────────────────────────────────────
-    dataset_path:     str = "asset/dataset/pusht"
+    dataset_path:     str = "asset/data/pusht"
     model_path:       str = "asset/model/Qwen3.5-0.8B"
     output_dir:       str = "asset/runs/pusht/exp02a_dit"
     # Exp01 and Exp02a use the same layer-28 single-layer cache — no re-run needed
-    embeddings_cache: str = "asset/runs/pusht/exp01_mlp/vlm_embeddings.pt"
+    embeddings_cache: str = "asset/runs/pusht/exp01_mlp/vlm_embeddings.h5"
 
     # ── Task ──────────────────────────────────────────────────────────────────
     task_text: str = "Push the T-shaped block onto the T-shaped target."
