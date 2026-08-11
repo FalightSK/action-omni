@@ -61,6 +61,9 @@ def _get_raw_dataset(dataset_name: str, cfg):
     if dataset_name == "language_table":
         from data.language_table import LanguageTableDataset
         return LanguageTableDataset(cfg)
+    if dataset_name == "libero":
+        from data.libero import LiberoDataset
+        return LiberoDataset(cfg)
     raise NotImplementedError(f"Dataset {dataset_name!r} not yet implemented. "
                               f"Add a loader in data/{dataset_name}/dataset.py.")
 
@@ -159,7 +162,7 @@ def _recompute_actions_only(cfg, out_path: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Pre-compute VLM embeddings")
     parser.add_argument("--dataset",          type=str, default="pusht",
-                        help="Dataset name: pusht, aloha, language_table, ood")
+                        help="Dataset name: pusht, aloha, language_table, libero, ood")
     parser.add_argument("--exp",              type=str, default="exp02a",
                         help="Experiment ID: exp01, exp02a, exp03, exp04, …")
     parser.add_argument("--max-samples",      type=int, default=None,

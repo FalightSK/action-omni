@@ -49,7 +49,7 @@ if (Test-Path $cache) {
 }
 
 # Step 3: train (auto-retry + resume from last.pt on GPU-driver TDR / crash)
-# batch sized from VRAM calibration (scripts/_vram_calib.py). Do NOT raise the batch
+# batch sized from VRAM calibration (scripts/archive/_vram_calib.py). Do NOT raise the batch
 # without recalibrating - overshooting VRAM crashes the PC. train.py auto-resumes from
 # checkpoints/last.pt, so a TDR only costs the current epoch; we relaunch up to N times.
 $batch = 1024

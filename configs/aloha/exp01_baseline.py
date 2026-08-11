@@ -40,8 +40,7 @@ from configs.base_config import BaseVLAConfig
 
 
 def _default_dataset_root() -> str:
-    return str(Path.home() / ".cache" / "huggingface" / "lerobot"
-               / "lerobot" / "aloha_sim_transfer_cube_human")
+    return str(Path(__file__).parents[2] / "asset" / "data" / "aloha_sim_transfer_cube_human")
 
 
 @dataclass
@@ -52,7 +51,7 @@ class AlohaExp01(BaseVLAConfig):
     dataset_path:     str = ""                       # alias kept for base-class API
     model_path:       str = "Qwen/Qwen3.5-0.8B"      # resolved from HF cache (offline ok)
     output_dir:       str = "asset/runs/aloha/exp01_baseline"
-    embeddings_cache: str = "asset/runs/aloha/exp01_baseline/vlm_embeddings.pt"
+    embeddings_cache: str = "asset/runs/aloha/exp01_baseline/vlm_embeddings.h5"
 
     # ── Task ──────────────────────────────────────────────────────────────────
     task_text: str = "Pick up the cube with the right arm and transfer it to the left arm."

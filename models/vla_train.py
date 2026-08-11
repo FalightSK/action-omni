@@ -50,6 +50,7 @@ class VLATrainModel(nn.Module):
             img_grid_w    = cfg.img_grid_w,
             n_vlm_layers  = cfg.n_vlm_layers,
             fusion_mode   = getattr(cfg, "fusion_mode", "linear"),
+            n_views       = getattr(cfg, "n_views", 1),
         )
 
         if self.use_dit:

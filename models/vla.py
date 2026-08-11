@@ -47,6 +47,9 @@ Cache format v3 (precompute_embeddings.py)
 
 from __future__ import annotations
 import math
+import sys
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 from transformers import AutoProcessor, AutoModel
@@ -259,6 +262,7 @@ class SpatialAwareMLP(nn.Module):
         max_h:       int = 16,
         max_w:       int = 16,
         max_seq:     int = 128,
+        n_views:     int = 1,
     ) -> None:
         super().__init__()
         in_dim = vlm_dim + pos_dim
@@ -273,6 +277,22 @@ class SpatialAwareMLP(nn.Module):
         self.pos2d = SpatialPositionEncoding2D(pos_dim, max_h, max_w)
         self.pos1d = SinusoidalPE1D(pos_dim, max_seq)
 
+        # Multi-view support. The 2-D grid PE describes ONE view, and the
+        # forward pass indexes it by each image token's running position. With
+        # two cameras the running index reaches 2*G-1 while the table holds only
+        # G rows, so every token of the second view would clamp onto the last
+        # row of the first — the whole wrist view collapsing to one position.
+        # The table is therefore tiled per view and offset by a learned view
+        # embedding, so a patch at (row, col) in the wrist view is distinct from
+        # the same patch in the exterior view.
+        #
+        # n_views == 1 builds NOTHING extra and leaves the tensor bit-identical
+        # to the single-view path, so exp01-exp04 remain exactly reproducible.
+        self.n_views = int(n_views)
+        if self.n_views > 1:
+            self.view_emb = nn.Parameter(torch.zeros(self.n_views, pos_dim))
+            nn.init.normal_(self.view_emb, std=0.02)
+
     def forward(
         self,
         tokens:   torch.Tensor,   # (B, seq_len, vlm_dim) — after LoRA
@@ -284,7 +304,12 @@ class SpatialAwareMLP(nn.Module):
         dev   = tokens.device
         dtype = tokens.dtype
 
-        img_pe = self.pos2d(grid_h, grid_w).to(device=dev, dtype=dtype)  # (n_img, pos_dim)
+        img_pe = self.pos2d(grid_h, grid_w).to(device=dev, dtype=dtype)  # (G, pos_dim)
+        if self.n_views > 1:
+            G = img_pe.shape[0]
+            view_id = torch.arange(self.n_views, device=dev).repeat_interleave(G)
+            img_pe = (img_pe.repeat(self.n_views, 1)
+                      + self.view_emb.to(device=dev, dtype=dtype)[view_id])
         txt_pe = self.pos1d(S).to(device=dev, dtype=dtype)               # (S,     pos_dim)
         n_img  = img_pe.shape[0]
         n_txt  = txt_pe.shape[0]
@@ -386,6 +411,7 @@ class VLMTokenAdapter(nn.Module):
         img_grid_w:   int   = 8,
         n_vlm_layers: int   = 1,
         fusion_mode:  str   = "linear",   # "linear" (Exp03) | "weighted" (Exp05)
+        n_views:      int   = 1,
     ) -> None:
         super().__init__()
         self.grid_h = img_grid_h
@@ -404,7 +430,8 @@ class VLMTokenAdapter(nn.Module):
 
         self.lora    = PerTokenLoRA(vlm_dim, lora_rank, lora_scale)
         self.spatial = SpatialAwareMLP(vlm_dim, adapter_dim, pos_dim,
-                                        dropout, img_grid_h * 2, img_grid_w * 2)
+                                        dropout, img_grid_h * 2, img_grid_w * 2,
+                                        n_views=n_views)
         self.readout = AttentionReadout(adapter_dim, readout_heads)
 
         n = sum(p.numel() for p in self.parameters())
@@ -450,14 +477,47 @@ class VLAModel(nn.Module):
         super().__init__()
         self.config = config
 
-        # ── Frozen Qwen3.5-0.8B ──────────────────────────────────────────
-        print(f"  Loading VLM from {config.model_path} …")
-        self.processor = AutoProcessor.from_pretrained(
-            config.model_path, trust_remote_code=True
-        )
-        self.vlm = AutoModel.from_pretrained(
-            config.model_path, dtype=torch.bfloat16, trust_remote_code=True,
-        )
+        # ── Frozen VLM ───────────────────────────────────────────────────
+        # Default is the project's own Qwen3.5-0.8B. Other backbones (pi05,
+        # groot, ...) are loaded through the cross-backbone study's loader, which
+        # already knows how to graft a lerobot policy's VLM subtree into the
+        # matching HF architecture and discard its action expert. Reusing that
+        # loader keeps one implementation of the grafting rules rather than two
+        # that can drift apart.
+        backbone = getattr(config, "vlm_backbone", "qwen")
+        if backbone != "qwen":
+            import importlib.util
+            _bp = Path(__file__).resolve().parents[1] / "scripts" / "analysis" /                 "latent_compare" / "backbones.py"
+            _spec = importlib.util.spec_from_file_location("_lc_backbones", _bp)
+            _mod = importlib.util.module_from_spec(_spec)
+            sys.modules["_lc_backbones"] = _mod
+            _spec.loader.exec_module(_mod)
+            print(f"  Loading VLM backbone '{backbone}' via latent_compare loader …")
+            bb = _mod.load_backbone(backbone, device="cpu", dtype=torch.bfloat16)
+            self.processor = bb.processor
+            self.vlm = bb.model
+            self._vlm_family = backbone
+            # Reused rather than re-derived: the study's loader already resolves
+            # each family's final norm module and fails loudly if it cannot.
+            self._vlm_final_norm = getattr(bb, "final_norm", None)
+            if bb.hidden_size != config.vlm_hidden_size:
+                raise ValueError(
+                    f"config.vlm_hidden_size={config.vlm_hidden_size} but backbone "
+                    f"'{backbone}' is {bb.hidden_size}-wide. The adapter is built "
+                    f"from the config value, so a mismatch would fail deep inside "
+                    f"the first forward with a shape error instead of here."
+                )
+            config.image_token_id = bb.image_token_id
+        else:
+            print(f"  Loading VLM from {config.model_path} …")
+            self.processor = AutoProcessor.from_pretrained(
+                config.model_path, trust_remote_code=True
+            )
+            self.vlm = AutoModel.from_pretrained(
+                config.model_path, dtype=torch.bfloat16, trust_remote_code=True,
+            )
+            self._vlm_family = "qwen"
+            self._vlm_final_norm = None
         for p in self.vlm.parameters():
             p.requires_grad_(False)
         self.vlm.eval()
@@ -493,12 +553,35 @@ class VLAModel(nn.Module):
     def build_vlm_inputs(
         self, images: list, task_texts: list[str], device: torch.device
     ) -> dict:
+        # Each family is queried in the prompt format it was trained on.
+        # PaliGemma/Pi-0.5 take the bare instruction with a trailing newline and
+        # have no chat template at all; feeding them a Qwen-style chat wrapper
+        # would measure the format mismatch rather than the representation.
+        if getattr(self, "_vlm_family", "qwen") in ("pi05", "paligemma"):
+            prompts = [t + "\n" for t in task_texts]
+            # Pad to a FIXED total length, not to the longest item in the batch.
+            # A per-batch length makes the precomputed embedding cache ragged,
+            # and worse, silently changes the sequence between training
+            # (canonical instructions, <=10 text tokens) and OOD evaluation
+            # (paraphrases, up to 13) — so the policy would meet a tensor shape
+            # at eval that it never saw during training.
+            if getattr(self.config, "text_token_budget", None) is None:
+                inp = self.processor(text=prompts, images=images, padding=True,
+                                     return_tensors="pt")
+            else:
+                inp = self.processor(text=prompts, images=images,
+                                     return_tensors="pt", padding="max_length",
+                                     max_length=int(self.config.img_seq_len))
+            return {k: v.to(device) for k, v in inp.items()}
+
+        # Each entry of `images` is either one PIL image (single view) or a list
+        # of views for that frame. Normalising to a list keeps one code path.
+        views = [im if isinstance(im, (list, tuple)) else [im] for im in images]
         messages = [
-            [{"role": "user", "content": [
-                {"type": "image", "image": img},
-                {"type": "text",  "text":  txt},
-            ]}]
-            for img, txt in zip(images, task_texts)
+            [{"role": "user", "content":
+                [{"type": "image", "image": v} for v in vs]
+                + [{"type": "text", "text": txt}]}]
+            for vs, txt in zip(views, task_texts)
         ]
         texts = [
             self.processor.apply_chat_template(
@@ -506,8 +589,38 @@ class VLAModel(nn.Module):
             )
             for m in messages
         ]
-        inp = self.processor(text=texts, images=images, padding=True, return_tensors="pt")
+        # The processor wants a FLAT image list whose length matches the total
+        # number of <image> placeholders across all texts, in the same order.
+        flat = [v for vs in views for v in vs]
+        inp = self.processor(text=texts, images=flat, padding=True, return_tensors="pt")
         return {k: v.to(device) for k, v in inp.items()}
+
+    @property
+    def _n_vlm_layers(self) -> int:
+        cfg = self.vlm.config
+        cfg = getattr(cfg, "text_config", cfg)
+        return int(cfg.num_hidden_layers)
+
+    def _resolved_layers(self) -> tuple[int, ...]:
+        """Validate and normalise config.vlm_extract_layers against the real stack.
+
+        hidden_states is 1-indexed for transformer blocks (index 0 is the
+        embedding output), so a stack of N layers exposes valid indices 1..N.
+        Out-of-range indices used to be harmless because the single-layer path
+        ignored them entirely; now that the index is honoured, an out-of-range
+        value would raise deep inside indexing, so it is clamped loudly here.
+        Negative indices count from the top (-1 == last layer).
+        """
+        n = self._n_vlm_layers
+        out = []
+        for l in self.config.vlm_extract_layers:
+            li = n + 1 + l if l < 0 else l
+            if not (1 <= li <= n):
+                print(f"  [warn] vlm_extract_layers={l} is out of range for a "
+                      f"{n}-layer stack; clamping to {min(max(li, 1), n)}")
+                li = min(max(li, 1), n)
+            out.append(li)
+        return tuple(out)
 
     @torch.no_grad()
     def encode_vlm(self, vlm_inputs: dict) -> tuple[torch.Tensor, torch.Tensor]:
@@ -517,16 +630,90 @@ class VLAModel(nn.Module):
                    : (B, n_layers, seq_len, vlm_hidden_size)  — multi-scale (n_vlm_layers>1)
           img_mask : (B, seq_len) bool
         """
-        layers = self.config.vlm_extract_layers
+        layers = self._resolved_layers()
         if len(layers) > 1:
             out = self.vlm(**vlm_inputs, return_dict=True, output_hidden_states=True)
             tokens = torch.stack(
                 [out.hidden_states[l].float() for l in layers], dim=1
             )  # (B, n_layers, S, 1024)
-        else:
+        elif layers[0] == self._n_vlm_layers and self._vlm_family == "qwen":
+            # Fast path: the requested layer IS the final one, so the cheaper
+            # call without output_hidden_states returns exactly the same tensor.
+            # Restricted to the bare AutoModel backbone — the grafted arms are
+            # loaded as ...ForConditionalGeneration wrappers whose output is a
+            # CausalLM object with logits and no last_hidden_state at all, so
+            # this path would raise AttributeError for them.
             out    = self.vlm(**vlm_inputs, return_dict=True)
             tokens = out.last_hidden_state.float()                  # (B, S, 1024)
+        else:
+            # Intermediate layer requested. This branch previously did not exist:
+            # the single-layer path always returned last_hidden_state and silently
+            # ignored vlm_extract_layers, which would make any depth ablation a
+            # no-op that looks like "depth doesn't matter".
+            # Call the BASE model, not the ...ForConditionalGeneration wrapper.
+            # The wrapper runs the LM head over every position and, when the
+            # processor emits `labels`, a full cross-entropy on top — both pure
+            # waste here, since only hidden states are read. On PaliGemma that
+            # is a (B, S, 257216) logits tensor: 69M elements per frame, which
+            # measured 30 GB peak at batch 32 and made this path ~7x slower than
+            # necessary. It also crashes outright at inference time, because the
+            # processor emits int32 labels and the loss requires int64.
+            #
+            # HF convention: XForConditionalGeneration.model is the backbone
+            # without the head; fall back to the full module for any arm that
+            # does not follow it.
+            vlm_inputs.pop("labels", None)
+            core   = getattr(self.vlm, "model", self.vlm)
+            out    = core(**vlm_inputs, return_dict=True, output_hidden_states=True)
+            hs     = out.hidden_states
+            tokens = hs[layers[0]].float()                          # (B, S, 1024)
+
+            # Apply the language stack's final RMSNorm to INTERMEDIATE reads.
+            #
+            # HF applies that norm only to the last hidden state, so hs[-1] is
+            # post-norm while every earlier entry is pre-norm. Two arms read at
+            # different relative depths therefore come back on different scales:
+            # GR00T at layer 16 of 16 is post-norm, Qwen3-VL at layer 16 of 28 is
+            # pre-norm, and the pair would differ by normalisation rather than by
+            # weights. This is the same defect the Chapter 1 extraction hit — it
+            # read cosine 0.22 for a provably identical pair until fixed, then
+            # 0.999995 — so the correction is mirrored here rather than left for
+            # the training path to rediscover.
+            fin = getattr(self, "_vlm_final_norm", None)
+            if fin is not None and layers[0] < len(hs) - 1:
+                tokens = fin(tokens.to(next(fin.parameters()).dtype)).float()
         img_mask = (vlm_inputs["input_ids"] == self.config.image_token_id)
+
+        # Right-pad with ZEROS to the configured sequence length.
+        #
+        # PaliGemma-family arms already arrive at exactly img_seq_len, because
+        # build_vlm_inputs asks the processor for padding="max_length". The
+        # chat-template families (groot, qwen3vl, ...) have no such option and
+        # come back padded only to the longest item IN THE BATCH. precompute
+        # then writes them into a zero-filled (N, img_seq_len, H) buffer, so the
+        # cache the head trains on carries real tokens followed by exact zeros —
+        # measured on exp03: 78 real, 10 zero, 88 total.
+        #
+        # Closed-loop evaluation encodes live with batch size 1, so without this
+        # it would hand the head a 78-token sequence it never saw in training.
+        # That degrades ONLY closed-loop performance, which is indistinguishable
+        # from the hypothesis under test being false. Padding here rather than in
+        # the eval agent keeps both paths on one implementation; for the
+        # PaliGemma arms it is a no-op.
+        target = int(getattr(self.config, "img_seq_len", tokens.shape[-2]))
+        cur = tokens.shape[-2]
+        if cur < target:
+            pad = target - cur
+            zeros = tokens.new_zeros(*tokens.shape[:-2], pad, tokens.shape[-1])
+            tokens = torch.cat([tokens, zeros], dim=-2)
+            img_mask = torch.cat(
+                [img_mask, img_mask.new_zeros(img_mask.shape[0], pad)], dim=1)
+        elif cur > target:
+            raise ValueError(
+                f"encoded sequence is {cur} tokens but config.img_seq_len is "
+                f"{target}; truncating would silently drop instruction tokens. "
+                f"Raise img_seq_len and rebuild the cache."
+            )
         return tokens, img_mask
 
     # ── End-to-end inference (used in inference.py) ───────────────────────

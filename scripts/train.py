@@ -31,13 +31,17 @@ from configs.registry import get_config
 from models.vla_train import VLATrainModel
 
 
-def _get_embedding_dataset(dataset_name: str, cache_path: str):
+def _get_embedding_dataset(dataset_name: str, cache_path: str, expect_layers=None):
     # HDF5 caches are dataset-agnostic — the lazy on-disk reader handles any dataset
     # whose embeddings were streamed to .h5/.hdf5 by precompute.py (large datasets
     # like Language Table 10% that cannot fit the full embedding tensor in RAM).
     from data.hdf5_embeddings import is_hdf5_path, HDF5EmbeddingDataset
     if is_hdf5_path(cache_path):
-        return HDF5EmbeddingDataset(cache_path)
+        # expect_layers makes a stale cache fail loudly. Two caches built at
+        # different depths are identical in shape and dtype, so without this a
+        # depth ablation would reuse whichever was cached first and conclude
+        # that depth has no effect.
+        return HDF5EmbeddingDataset(cache_path, expect_layers=expect_layers)
 
     if dataset_name == "pusht":
         from data.pusht import PushTEmbeddingDataset
@@ -86,7 +90,8 @@ def main() -> None:
     print("[1/4] Loading embedding dataset …")
     from data.hdf5_embeddings import is_hdf5_path
     is_h5    = is_hdf5_path(cache_path)
-    full_ds  = _get_embedding_dataset(args.dataset, cache_path)
+    full_ds  = _get_embedding_dataset(args.dataset, cache_path,
+                                      expect_layers=cfg.vlm_extract_layers)
     val_len  = max(1, int(len(full_ds) * 0.10))
     train_ds, val_ds = random_split(
         full_ds, [len(full_ds) - val_len, val_len],

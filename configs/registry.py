@@ -26,31 +26,47 @@ from __future__ import annotations
 # ── Registry: (dataset, exp_id) → config class ───────────────────────────────
 
 _REGISTRY: dict[tuple[str, str], str] = {
-    # PushT
-    ("pusht", "exp01"):       "configs.pusht.exp01_mlp.PushTExp01MLP",
+    # PushT — best architecture (DiT)
     ("pusht", "exp02"):       "configs.pusht.exp02a_dit.PushTExp02aDiT",
     ("pusht", "exp02a"):      "configs.pusht.exp02a_dit.PushTExp02aDiT",
-    ("pusht", "exp03"):       "configs.pusht.exp03_multiscale.PushTExp03MultiScale",
-    ("pusht", "exp04"):       "configs.pusht.exp04_vit.PushTExp04ViT",
-    ("pusht", "exp04_vit"):   "configs.pusht.exp04_vit.PushTExp04ViT",
-    ("pusht", "exp05"):       "configs.pusht.exp05_weighted.PushTExp05Weighted",
-    ("pusht", "exp05_weighted"): "configs.pusht.exp05_weighted.PushTExp05Weighted",
-    # ALOHA — bimanual 14-DOF transfer cube
+    # ALOHA — bimanual 14-DOF; transfer-cube baseline + peg insertion (both kept)
     ("aloha", "exp01"):          "configs.aloha.exp01_baseline.AlohaExp01",
     ("aloha", "exp01_baseline"): "configs.aloha.exp01_baseline.AlohaExp01",
-    ("aloha", "exp02"):          "configs.aloha.exp02_openloop.AlohaExp02OpenLoop",
-    ("aloha", "exp02_openloop"): "configs.aloha.exp02_openloop.AlohaExp02OpenLoop",
-    # Language Table — language-conditioned 2D block pushing
-    ("language_table", "exp01"):          "configs.language_table.exp01_baseline.LTExp01",
-    ("language_table", "exp01_baseline"): "configs.language_table.exp01_baseline.LTExp01",
+    ("aloha", "exp03"):           "configs.aloha.exp03_insertion.AlohaExp03Insertion",
+    ("aloha", "exp03_insertion"): "configs.aloha.exp03_insertion.AlohaExp03Insertion",
+    # LIBERO-Goal — 10 goals over one fixed scene; the language testbed
+    ("libero", "exp01"):      "configs.libero.exp01_goal.LiberoExp01Goal",
+    ("libero", "exp01_goal"): "configs.libero.exp01_goal.LiberoExp01Goal",
+    # Exp02 is the H1 control: stock PaliGemma-3B, the checkpoint Pi-0.5 was
+    # finetuned from. Identical head/data/read-layer/chunking, so the pair
+    # differs only in whether the VLM ever saw robot data.
+    ("libero", "exp02"):      "configs.libero.exp02_paligemma.LiberoExp02PaliGemma",
+    ("libero", "exp02_paligemma"): "configs.libero.exp02_paligemma.LiberoExp02PaliGemma",
+    # Exp03/exp04 repeat H1 in the Qwen3-VL family, where BOTH arms are
+    # text-blind (Chapter 1 text-visibility 0.0000) so neither has backbone
+    # fusion for our head to render redundant — removing the asymmetry that
+    # makes the Pi-0.5/PaliGemma pair arguable.
+    ("libero", "exp03"):      "configs.libero.exp03_groot.LiberoExp03Groot",
+    ("libero", "exp03_groot"): "configs.libero.exp03_groot.LiberoExp03Groot",
+    ("libero", "exp04"):      "configs.libero.exp04_qwen3vl.LiberoExp04Qwen3VL",
+    ("libero", "exp04_qwen3vl"): "configs.libero.exp04_qwen3vl.LiberoExp04Qwen3VL",
+    # exp05/exp06 repeat the exp03/exp04 pair with BOTH cameras — the observation
+    # spec every published LIBERO pipeline uses. Single-view puts the
+    # robot-pretrained arm outside its trained input configuration while leaving
+    # the stock arm inside its own, an asymmetry pointing the same way as the
+    # result, so only this pair can test H1 cleanly.
+    ("libero", "exp05"):      "configs.libero.exp05_groot_2view.LiberoExp05Groot2View",
+    ("libero", "exp05_groot_2view"): "configs.libero.exp05_groot_2view.LiberoExp05Groot2View",
+    ("libero", "exp06"):      "configs.libero.exp06_qwen3vl_2view.LiberoExp06Qwen3VL2View",
+    ("libero", "exp06_qwen3vl_2view"): "configs.libero.exp06_qwen3vl_2view.LiberoExp06Qwen3VL2View",
+    # Language Table — curated 50/50 reach+push subset
+    ("language_table", "exp03"):          "configs.language_table.exp03_curated.LTExp03Curated",
+    ("language_table", "exp03_curated"):  "configs.language_table.exp03_curated.LTExp03Curated",
 }
 
 # Legacy integer → (dataset, exp_id) mapping for backward compat
 _LEGACY_MAP: dict[int, tuple[str, str]] = {
-    1: ("pusht", "exp01"),
     2: ("pusht", "exp02a"),
-    3: ("pusht", "exp03"),
-    5: ("pusht", "exp05"),
 }
 
 
