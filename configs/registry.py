@@ -55,6 +55,13 @@ _REGISTRY: dict[tuple[str, str], str] = {
     # robot-pretrained arm outside its trained input configuration while leaving
     # the stock arm inside its own, an asymmetry pointing the same way as the
     # result, so only this pair can test H1 cleanly.
+    # ALOHA transfer-cube: the LIBERO pretraining null retested on a bimanual
+    # 14-DOF embodiment with a joint-space action space — a venue inside GR00T's
+    # pretraining distribution, so biased toward finding a pretraining effect.
+    ("aloha", "exp05"):       "configs.aloha.exp05_groot_transfer.AlohaExp05GrootTransfer",
+    ("aloha", "exp05_groot_transfer"): "configs.aloha.exp05_groot_transfer.AlohaExp05GrootTransfer",
+    ("aloha", "exp06"):       "configs.aloha.exp06_qwen3vl_transfer.AlohaExp06Qwen3VLTransfer",
+    ("aloha", "exp06_qwen3vl_transfer"): "configs.aloha.exp06_qwen3vl_transfer.AlohaExp06Qwen3VLTransfer",
     ("libero", "exp05"):      "configs.libero.exp05_groot_2view.LiberoExp05Groot2View",
     ("libero", "exp05_groot_2view"): "configs.libero.exp05_groot_2view.LiberoExp05Groot2View",
     ("libero", "exp06"):      "configs.libero.exp06_qwen3vl_2view.LiberoExp06Qwen3VL2View",

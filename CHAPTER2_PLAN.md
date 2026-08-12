@@ -358,6 +358,148 @@ setup**. This is why it runs first.
 
 ---
 
+### H4 — ALOHA: the LIBERO null does NOT generalise (2026-08-12)
+
+H1 concluded "robot pretraining of the VLM is not necessary." That conclusion
+now has to be stated **conditionally on task structure**, because the same
+GR00T-vs-stock contrast on a bimanual 14-DOF embodiment reverses it.
+
+*Pre-registered falsifier for the LIBERO null:* a venue inside GR00T's
+pretraining distribution. Bimanual manipulation qualifies, so this test is
+biased TOWARD finding a pretraining effect and a null here would have been
+strong. It did not return a null.
+
+**Headline, n = 400 per arm** — two independent 200-episode runs on disjoint
+seed ranges (`--seed-offset 0` and `1000`; `envs/aloha_env.py` derives cube pose
+from the episode seed alone, so without the offset a rerun replays the same 200
+scenes and resamples only the policy's flow noise):
+
+| Arm | Run 1 | Run 2 | Pooled | Wilson 95% CI |
+|---|---|---|---|---|
+| exp05 GR00T N1.7 | 60.0% | 62.5% | **61.25%** (245/400) | [56.4, 65.9] |
+| exp06 Qwen3-VL-2B | 49.0% | 54.5% | **51.75%** (207/400) | [46.9, 56.6] |
+
+Gap **+9.5 pts**, z = 2.71, **p = 0.0067** — clears the Bonferroni bar for the
+~6 comparisons run in this chapter (0.05/6 = 0.0083). CIs do not overlap.
+
+**The gap is one transition, not general competence.** ALOHA rewards
+{1,2,3,4} = touch / lift / handover / success. `max_reward == 3` never occurs in
+800 episodes (GR00T `{0:43, 1:15, 2:97, 4:245}`, Qwen `{0:30, 1:23, 2:140,
+4:207}`), so the ladder is effectively touch → lift → handover:
+
+| Stage | GR00T | Qwen3-VL | Δ | p |
+|---|---|---|---|---|
+| P(touch) | 89.2% | 92.5% | −3.3 | 0.11 |
+| P(lift \| touch) | 95.8% | 93.8% | +2.0 | 0.22 |
+| **P(handover \| lift)** | **71.6%** | **59.7%** | **+12.0** | **0.0009** |
+
+The two early stages run *against* GR00T. This is not a uniform advantage — it
+is localised to the one stage that bimanual pretraining plausibly covers, and
+the localisation is tighter (p = 0.0009) than the top-line result.
+
+### H4b — head diagnostics on ALOHA: offline sees nothing (2026-08-12)
+
+Same battery as H1b, `--dataset aloha`. Between-arm difference (stock minus
+pretrained, % of pretrained):
+
+| Measure | Δ |
+|---|---|
+| velocity loss (overall) | +0.1% |
+| velocity loss (mid phase, contains handover) | +1.9% |
+| open-loop action error (nMAE, 14 dims) | −0.4% |
+| PE sensitivity | +1.1% |
+| attention mass on image | **−5.2%** |
+| **closed-loop success rate** | **−15.5%** |
+
+Four accuracy measures are flat against a gap the rollouts resolve at
+p = 0.0067. This is the chapter's dissociation in its strongest form: not
+"offline ranks them wrongly" (H1's r = −0.503) but **offline has no signal at
+all**. The single offline quantity that moves is attention *allocation* — the
+stock arm spends 5.2% less mass on image tokens and correspondingly more on text
+tokens that carry zero information on this task. Correlational, one dataset;
+the only surviving mechanistic candidate, not a finding.
+
+**Two pre-registered predictions failed, and both failures were informative.**
+
+1. *Predicted text ablation ≈ 1.00–1.05×; measured 1.14× (GR00T), 1.24× (Qwen).*
+   The reasoning — a constant instruction carries zero task-discriminative bits —
+   was right; the conclusion was not. Zeroing a constant input is still an
+   off-distribution perturbation, so the metric has a **floor above 1.0** and
+   ALOHA measures it. That is the control condition the LIBERO ablation never
+   had, and it reinterprets every LIBERO number: against a ~1.2× floor,
+   **Pi-0.5's 1.023× sits BELOW it** — it ignores its instruction more completely
+   than a model whose instruction is constant. Sharpest single claim available.
+
+2. *Predicted PE sensitivity ≥ LIBERO's; measured 0.038 vs 0.097–0.152, i.e.
+   2.5–4× LOWER.* "Handover is spatial registration" is falsified. The likely
+   cause is a component interaction worth reporting on its own: ALOHA acts in
+   **joint space** with fully observable 14-DOF proprioception, so the head can
+   source most of what it needs from state; LIBERO acts in **end-effector space**,
+   where the target's image position is what the action is computed against.
+   **Action space determines how much the policy uses vision.**
+
+A third prediction (Qwen worse on left-arm dims) failed after a real defect was
+fixed: `per_dim_error` hard-coded `.reshape(-1, 7)`, which on 14-DOF ALOHA does
+not raise but silently interleaves two joints into every reported column. Now
+reads `cfg.action_dim`. Corrected result: no arm-specific deficit. `d13` (+9.2%,
+plausibly the left gripper) is 1 of 14 dims with no multiple-comparison control
+and unverified column ordering — a lead for Discussion, nothing more.
+
+### H4c — checkpoint ladder: what pretraining actually buys (2026-08-12)
+
+The n = 400 numbers describe the ceiling only. The claim actually made for robot
+pretraining in practice is sample efficiency, which needs the whole curve.
+Six snapshots × 2 arms × 50 episodes, **paired**: every eval sees the same 50
+cube poses (`--seed-offset 2000`), so scene difficulty cancels between
+conditions and the small n is workable.
+
+| Epoch | GR00T | Qwen3-VL | Gap | McNemar p |
+|---|---|---|---|---|
+| 25 | 8.0% | **0.0%** | +8.0 | 0.125 |
+| 50 | 28.0% | **0.0%** | +28.0 | **0.0001** |
+| 100 | 46.0% | 22.0% | +24.0 | 0.017 |
+| 150 | 54.0% | 28.0% | +26.0 | 0.035 |
+| 200 | 72.0% | 48.0% | +24.0 | 0.036 |
+| 300 | 66.0% | 46.0% | +20.0 | 0.053 |
+
+- **The stock backbone cannot do the task early at all** — 0/50 at epochs 25 and
+  50 while GR00T is at 28%. p = 0.0001, the strongest point in the ladder.
+- **Stock needs ~2× the training** to reach any given rate: 2.4× / 2.8× / 2.2× /
+  1.9× at the 20/30/40/46% targets.
+- **The gap does not close by epoch 300.** So "pretraining buys speed, not skill"
+  is NOT supported — it buys both, with speed the larger effect.
+
+**Anchor check, and the reason the ladder's magnitude is not quotable.** The
+ladder's 50 paired scenes are a fixed sample, and evidently a slightly
+unrepresentative one: ep300 reads GR00T 66.0% (anchor 61.25%, +4.8) and Qwen
+46.0% (anchor 51.75%, −5.8). Each deviation is inside one SE (~6.7 pts), so
+nothing is broken — but it means the ladder establishes the **shape** and the
+n = 400 pooled runs establish the **magnitude (+9.5 pts)**. Do not quote +24.
+
+**Untested observation:** both arms peak at epoch 200 and drop at 300, while
+best-val-loss selected epochs 285 and 280. If that survives a higher-n test it is
+a fourth instance of the offline/online dissociation — offline checkpoint
+selection picking the wrong checkpoint for both arms. 72 vs 66 at n = 50 is
+within noise and no paired test was run, so this is flagged, not claimed.
+
+### Consequence for H1
+
+H1's null stands **for LIBERO-Goal** and is now bounded rather than general:
+
+> Robot pretraining of the VLM contributes nothing measurable on single-arm
+> pick-and-place with two cameras (2.5 pts, p = 0.40, against a camera effect of
+> +21 to +29 pts), and contributes a replicated +9.5 pts on bimanual handover,
+> concentrated in one transition, plus roughly 2× training efficiency.
+
+The unresolved confound, stated plainly: LIBERO and ALOHA differ on **six axes at
+once** — language variation (10 instructions vs 1), DOF (7 vs 14), arms (single
+vs bimanual), action space (end-effector vs joint), cameras (2 vs 1), and
+distribution match to GR00T's pretraining corpus. Two datasets cannot separate
+them. Any claim naming one axis as the cause is an interpretation, not a result,
+and must be written as such.
+
+---
+
 ## 4. Experiment matrix
 
 Four backbones, one identical DiT head, two matched pairs.

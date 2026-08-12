@@ -39,12 +39,19 @@ earlier in this project found image tokens carried the control signal while
 disagreed on the same component. Any sentence containing "needed" must rest on
 tier 2.
 
+Chapter 2 hardened this from "they disagree" to "tier 1 is blind." On the ALOHA
+pair, velocity loss differs by 0.1%, open-loop action error by −0.4% and PE
+sensitivity by 1.1% — against a closed-loop gap of +9.5 points at p = 0.0067
+whose mechanism localises to a single transition at p = 0.0009. Offline metrics
+did not rank the policies wrongly; they carried no signal about the difference
+at all.
+
 ## Chapters
 
 | | Scope | Status |
 |---|---|---|
 | **Ch.1 — Audit of shipped VLAs** | Weight-level dissection of Pi-0.5, SmolVLA, GR00T N1.7 against their own base checkpoints; what their representations make available | **done** — `asset/analysis/latent_compare/` |
-| **Ch.2 — Component necessity** | Ablate → retrain → roll out. First axis: language-stack **depth** × the VLM→action **adapter** (AdaLN vs linear projection vs cross-attention) | next |
+| **Ch.2 — Component necessity** | Ablate → retrain → roll out. 8 arms across LIBERO-Goal (backbone × camera count) and ALOHA transfer-cube (backbone, bimanual) | **done** — `CHAPTER2_PLAN.md` §3 H1–H4c |
 | **Ch.3 — Data requirements** | What a dataset must supply for the task to be learnable at all; the Language Table negative and the gate that detects it cheaply | partly done |
 
 ## Component ledger
@@ -53,7 +60,8 @@ What Ch.1 already settles, and what Ch.2 must test:
 
 | Component | Status | Evidence |
 |---|---|---|
-| Robot-pretrained VLM | **not required** | SmolVLA ships stock and frozen; verified tensor-identical |
+| Robot-pretrained VLM | **task-dependent** (revised 2026-08-12) | SmolVLA ships stock and frozen, tensor-identical; LIBERO-Goal 2-view null (2.5 pts, p = 0.40); but ALOHA bimanual **+9.5 pts, p = 0.0067** (n = 400/arm) and ~2× training efficiency |
+| Second camera | **required, and dominant** | +21 to +29 pts on LIBERO-Goal (p < 10⁻⁷) — an order of magnitude above the backbone effect |
 | Upper half of the language stack | **likely not required** | action R² peaks at ~50% depth for 9/9 arms on ALOHA, 8/9 on LIBERO-Goal; two teams independently cut to 16 layers |
 | Image/text subspace separation | **not a component** | a depth effect, not a pretraining product (0–3% survives depth matching) |
 | VLM restructuring | **optional, graded** | Pi-0.5 heavy (median Δ 0.183), GR00T light (0.003), SmolVLA zero |
@@ -80,9 +88,13 @@ assumed. Running it costs minutes and can save weeks.
 
 | Env | Purpose | Why separate |
 |---|---|---|
-| `vla` | training, analysis, probes | numpy 2.2 / torch 2.10 / transformers 5.3, Python 3.12 |
+| `vla` | training, analysis, probes, **gym-aloha rollouts** | numpy 2.2 / torch 2.10 / transformers 5.3, Python 3.12 |
 | `vla_libero` | LIBERO simulator, closed-loop rollouts | LIBERO pins numpy 1.22 / robosuite 1.4 / mujoco 2.3; installing it into `vla` would downgrade numpy under torch and break the study |
 | `vla_lt_data` | TFDS / Language Table conversion | same reason |
+
+**Two MuJoCo backends, not interchangeable.** LIBERO/robosuite drives raw mujoco
+and needs `MUJOCO_GL=wgl`; gym-aloha goes through dm_control, which rejects `wgl`
+outright and needs `MUJOCO_GL=glfw`. Using the wrong one fails at env creation.
 
 Setup for the simulator is scripted and idempotent —
 `scripts/data/_setup_libero.py`, verified by `scripts/data/_verify_libero.py`.
