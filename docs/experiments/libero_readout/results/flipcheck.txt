@@ -1,4 +1,0 @@
-[info] using task orders [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-Local assets not found. Downloading from HuggingFace Hub...
-Assets already downloaded at /root/.cache/libero/assets
-285  hflip=4619  vflip=5592  raw=6774

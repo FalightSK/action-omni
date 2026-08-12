@@ -82,8 +82,6 @@ def _style(ax):
 
 def figA1(A, L):
     rows = [
-        ("Pi-0.5",           "LIBERO", L["pi05"]["text_ablation"]["ratio"],        PRE),
-        ("PaliGemma-3B",     "LIBERO", L["paligemma"]["text_ablation"]["ratio"],   STOCK),
         ("GR00T 1-view",     "LIBERO", L["groot"]["text_ablation"]["ratio"],       PRE),
         ("Qwen3-VL 1-view",  "LIBERO", L["qwen3vl"]["text_ablation"]["ratio"],     STOCK),
         ("GR00T 2-view",     "LIBERO", L["groot2v"]["text_ablation"]["ratio"],     PRE),
@@ -113,9 +111,10 @@ def figA1(A, L):
     ax.set_title("Text ablation against its own floor\n"
                  "grey band = cost of the perturbation alone, measured on ALOHA's "
                  "single fixed instruction", fontsize=10, loc="left")
-    ax.annotate("Pi-0.5 falls BELOW the floor:\nit ignores text more completely\n"
-                "than a constant instruction",
-                xy=(vals[0], 0), xytext=(2.9, 0.55), fontsize=8.2, color=INK,
+    ax.annotate("ALOHA has ONE instruction, so zeroing it\n"
+                "removes no information. Whatever remains\n"
+                "is the metric's floor, not language use.",
+                xy=(floor_hi, 0.35), xytext=(2.5, 0.9), fontsize=8.2, color=INK,
                 arrowprops=dict(arrowstyle="->", color=INK2, lw=1.0))
     fig.tight_layout()
     fig.savefig(FIG / "figA1_text_ablation_floor.png", bbox_inches="tight")
@@ -211,17 +210,17 @@ def figA3(A, L):
     ax.set_title("Attention is near-uniform\n(no sharp token selection)", fontsize=9.5, loc="left")
 
     ax = _style(axes[2])
-    lib = {"Pi-0.5": "pi05", "PaliGemma": "paligemma", "GR00T 1v": "groot",
-           "Qwen 1v": "qwen3vl", "GR00T 2v": "groot2v", "Qwen 2v": "qwen3vl2v"}
+    lib = {"GR00T 1v": "groot", "Qwen 1v": "qwen3vl",
+           "GR00T 2v": "groot2v", "Qwen 2v": "qwen3vl2v"}
     names = list(lib) + ["GR00T\nALOHA", "Qwen\nALOHA"]
     vals = [L[k]["pe_sensitivity"]["relative_shift"] for k in lib.values()] + \
            [A[a]["pe_sensitivity"]["relative_shift"] for a in ARMS]
-    cols = [PRE, STOCK, PRE, STOCK, PRE, STOCK, PRE, STOCK]
+    cols = [PRE, STOCK, PRE, STOCK, PRE, STOCK]
     xs = np.arange(len(names))
     ax.bar(xs, vals, 0.64, color=cols, zorder=3)
-    ax.axvline(5.5, color=INK2, lw=1.0, ls="--")
-    ax.text(2.6, max(vals) * 0.96, "LIBERO (end-effector)", fontsize=8, ha="center", color=INK2)
-    ax.text(6.5, max(vals) * 0.96, "ALOHA\n(joint)", fontsize=8, ha="center", color=INK2)
+    ax.axvline(3.5, color=INK2, lw=1.0, ls="--")
+    ax.text(1.5, max(vals) * 0.99, "LIBERO (end-effector)", fontsize=8, ha="center", color=INK2)
+    ax.text(4.5, max(vals) * 0.99, "ALOHA\n(joint)", fontsize=8, ha="center", color=INK2)
     ax.set_xticks(xs, names, fontsize=7.4, rotation=35, ha="right")
     ax.set_ylabel("relative action shift when PE is zeroed")
     ax.set_title("Joint-space control needs\nspatial position far less", fontsize=9.5, loc="left")

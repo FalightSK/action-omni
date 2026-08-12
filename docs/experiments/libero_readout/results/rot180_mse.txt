@@ -1,1 +1,0 @@
-best init=2 mse=183.4 rmse=13.5/255

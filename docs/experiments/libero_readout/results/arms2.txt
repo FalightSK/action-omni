@@ -1,6 +1,0 @@
-all 30 0.001 best orig
-all 30 0.001 best swap
-all 9 0.001 worst orig
-instr 30 0.001 best orig
-instr 30 0.001 best swap
-instr 3 0.001 worst orig
