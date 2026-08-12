@@ -1,4 +1,0 @@
-VLM fwd (batch 1) :   144.1 ms
-env.step + render :    13.1 ms
-replan=4:   49.1 ms/step |  19.6 s/ep | 10x10=100 eps =  32.7 min/arm
-replan=8:   31.1 ms/step |  12.4 s/ep | 10x10=100 eps =  20.7 min/arm

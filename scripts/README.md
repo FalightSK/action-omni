@@ -19,7 +19,8 @@ Every subfolder script finds the repo root via `Path(__file__).parents[2]`
 - **`data/`** — dataset build + embedding-cache tooling (`_lt_make_curated_subset`, `_pt_to_h5_cache`, `_h5_*`, downloaders).
 - **`validation/`** — milestone validity gates (`_val_gate1_aloha`, `_val_gate1_lt`).
 - **`eval/`** — policy rollout / success-rate eval (`eval_lt_*`, `eval_ood_*`, `eval_token_ablation`, `_lt_eval_indist`).
-- **`analysis/`** — mechanistic / attention / PCA / token probes.
+- **`analysis/`** — head diagnostics (`head_diagnostics.py --dataset {libero,aloha}`), attention / PCA / token probes, figure generators.
+- **`report/`** — `build_report.py` → self-contained `report/vla_anatomy_report.{html,pdf}`.
 - **`plots/`** — figure generators + PDF report builders.
 - **`media/`** — rollout videos / filmstrips.
 - **`archive/`** — superseded: smolvla-era diagnostics, 0%-SR failure analysis, VRAM benches. Kept for reference, not part of the active pipeline.

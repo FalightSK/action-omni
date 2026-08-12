@@ -1,40 +1,46 @@
 # References
 
-Extracted from the retired `RESEARCH.md`, `README.md`, `MILESTONES.md` before
-those were removed for the pipeline rework. Kept because the revised plan will
-still need to position itself against this literature; everything else in those
-files (the old hypotheses/phases/roadmap) was project narrative, not reference
-material, and was not preserved.
+Literature this study positions against. Kept short and load-bearing: each entry
+is here because it constrains a claim made in `RESULTS.md`.
 
-## Supporting frozen-backbone evidence
+## Frozen visual backbones for control
 
-| Paper | What it shows |
+| Work | What it shows | Relevance |
+|---|---|---|
+| **R3M** (Nair et al., 2022) | Frozen ResNet visual features transfer to robot policies | Vision-only, no language — establishes that a frozen encoder can drive control |
+| **MVP** (Radosavovic et al., 2023) | Frozen MAE-ViT features transfer to manipulation | Same, with a ViT |
+| **DINOv2** (Oquab et al., 2023) | Frozen self-supervised features used for robotics | Same, self-supervised |
+| **RoboFlamingo** (Li et al., 2023) | Frozen VLM + trained head | Only *partially* freezes the visual encoder, so it is not a clean frozen-backbone reference |
+
+None of these test whether **robot-data pretraining** of the backbone adds
+anything over its stock base under a fixed head — the comparison this study runs.
+
+## Full-finetuning VLAs — the opposing position
+
+| Work | Their claim | What this study tests |
+|---|---|---|
+| **RT-2** (Brohan et al., 2023) | Finetuning the VLM on robot data produces emergent generalization | Whether the pretraining, rather than the complete system, is what produces the performance |
+| **OpenVLA** (Kim et al., 2024) | A 7B finetuned VLM outperforms prior VLA systems | Same |
+| **Octo** (Team, 2023) | Large-scale robot-data pretraining is the path to generalist policies | Same |
+| **GR00T N1** (NVIDIA, 2025) | Robot-pretrained VLM + diffusion head for humanoid manipulation | Supplies one arm of this study's pair; its `select_layer` sets the read depth |
+
+This study does **not** contradict any of these published results — none of their
+systems were run here. Their papers claim the complete system works; they do not
+establish that the VLM's robot pretraining is what produces that performance.
+That attribution is what is under test.
+
+## Reference points on the benchmarks used
+
+| Work | Relevance |
 |---|---|
-| **R3M** (Nair et al., 2022) | Frozen ResNet visual features transfer to robot policies. Vision-only, no language. |
-| **MVP** (Radosavovic et al., 2023) | Frozen MAE-ViT features transfer to manipulation. Vision-only, no language. |
-| **DINOv2 for robotics** (2023) | Frozen self-supervised ViT features used for robotics (cited in README as related but not detailed further). |
-| **RoboFlamingo** (Li et al., 2023) | Frozen VLM + finetuned head. Note: only *partially* freezes the visual encoder. |
+| **SmolVLA** (Shukor et al., 2025) | A full-finetuning VLA reproduced here on LIBERO-Spatial at 76.0% SR (100 rollouts). Also notable because its vision-language backbone ships bit-identical to stock SmolVLM2 — a published, working VLA that never finetuned its VLM |
+| **LIBERO** (Liu et al., 2023) | Source of the LIBERO-Goal suite: 10 goals over one fixed scene, which is what isolates the instruction pathway |
+| **ALOHA / ACT** (Zhao et al., 2023) | Source of the bimanual transfer-cube task and the receding-horizon action-chunking convention used here |
 
-## Opposing position — full/partial VLM finetuning
+## Method
 
-| Paper | Their claim |
+| Work | Relevance |
 |---|---|
-| **RT-2** (Brohan et al., 2023) | Finetuning the VLM on robot data produces emergent generalization. |
-| **OpenVLA** (Kim et al., 2024) | A 7B finetuned VLM outperforms prior VLA systems. |
-| **π0** (Black et al., 2024) | VLM + flow matching (backbone finetuned) for dexterous tasks — same decoder family as this project's DiT flow-matching decoder, but with a finetuned backbone. |
-| **Octo** (Team, 2023) | Large-scale robot-data pretraining is the path to generalist policies. |
-
-## Critical baselines
-
-| Paper | Relevance |
-|---|---|
-| **CLIP** (Radford et al., 2021) | Contrastive image-text pretraining; zero-shot aligns color/object names with images. The baseline any color/attribute-OOD claim must beat. |
-| **CLIPort** (2021) | CLIP-conditioned Diffusion Policy for language-conditioned manipulation — the baseline to beat for language-conditioned tasks specifically. |
-
-## Note on gaps identified against this literature (may or may not still be relevant to the revised plan)
-
-- None of the frozen-backbone papers (R3M, MVP, RoboFlamingo) test *joint* language-visual
-  pretraining (VLM) against vision-only encoders (ViT) for generalization.
-- None of the finetuning papers (RT-2, OpenVLA, π0, Octo) compare a finetuned VLM against a
-  frozen VLM on the same out-of-distribution generalization test — they show finetuned VLMs
-  work, not that finetuning is *necessary* relative to frozen.
+| **Rectified flow / flow matching** (Liu et al., 2022; Lipman et al., 2023) | The decoder's training objective: `x_t = (1-t)·x₀ + t·actions`, velocity regression |
+| **DiT** (Peebles & Xie, 2023) | The decoder's architecture; adaLN conditioning is the global pathway, cross-attention the local one |
+| **Diffusion Policy** (Chi et al., 2023) | Establishes action chunking with a receding horizon as the control convention |
