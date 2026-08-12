@@ -73,7 +73,8 @@ def _run_pusht(cfg, vlm_model, train_model, device, n_ep, save_video, output_pat
     return results
 
 
-def _run_aloha(cfg, vlm_model, train_model, device, n_ep, save_video, output_path):
+def _run_aloha(cfg, vlm_model, train_model, device, n_ep, save_video, output_path,
+               seed_offset: int = 0):
     from envs.aloha_env import AlohaAgent, run_episode
     import gymnasium as gym
     import gym_aloha  # noqa
@@ -93,7 +94,8 @@ def _run_aloha(cfg, vlm_model, train_model, device, n_ep, save_video, output_pat
     print(f"\n[4/4] Running {n_ep} episodes ...\n")
     results = []
     for ep in range(n_ep):
-        results.append(run_episode(env, agent, cfg, ep, n_ep, save_video, video_dir))
+        results.append(run_episode(env, agent, cfg, ep, n_ep, save_video, video_dir,
+                                   seed_offset=seed_offset))
     env.close()
     return results
 
@@ -136,6 +138,12 @@ def main() -> None:
                         help="Override checkpoint path (default: <output_dir>/checkpoints/best.pt)")
     parser.add_argument("--episodes",         type=int, default=None,
                         help="Number of eval episodes (default: cfg.sim_episodes, recommend 50+)")
+    parser.add_argument("--seed-offset",      type=int, default=0,
+                        help="ALOHA only: shift episode seeds so a repeat run "
+                             "samples DISJOINT cube poses. Needed for a genuine "
+                             "replication -- without it the same 200 initial "
+                             "scenes are re-used and only the policy's own flow "
+                             "noise is resampled.")
     parser.add_argument("--no-video",         action="store_true",
                         help="Skip video recording (faster)")
     parser.add_argument("--max-steps",        type=int, default=None,
@@ -194,7 +202,8 @@ def main() -> None:
     elif args.dataset == "aloha":
         results = _run_aloha(cfg, vlm_model, train_model, device,
                              n_ep, not args.no_video,
-                             Path(args.output) if args.output else None)
+                             Path(args.output) if args.output else None,
+                             seed_offset=args.seed_offset)
     elif args.dataset == "language_table":
         results = _run_language_table(cfg, vlm_model, train_model, device,
                                       n_ep, not args.no_video,

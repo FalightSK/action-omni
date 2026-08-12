@@ -65,7 +65,12 @@ sys.path.insert(0, str(ROOT / "scripts" / "analysis" / "latent_compare"))
 from analyze import cv_r2, parallel_analysis, _pcs  # noqa: E402
 
 OUT = ROOT / "asset" / "analysis" / "head_diagnostics"
-ARMS = {
+
+# Set from --dataset in main(). Every get_config() call routes through it, so the
+# whole battery follows one switch rather than a per-analysis flag.
+DATASET = "libero"
+
+ARMS_LIBERO = {
     # Pair 1 — PaliGemma family, 272 tokens, read at layer 18.
     "pi05":      ("exp01", "asset/runs/libero/exp01_goal"),
     "paligemma": ("exp02", "asset/runs/libero/exp02_paligemma"),
@@ -75,7 +80,30 @@ ARMS = {
     # to look like PaliGemma's for both, not like Pi-0.5's for either.
     "groot":     ("exp03", "asset/runs/libero/exp03_groot"),
     "qwen3vl":   ("exp04", "asset/runs/libero/exp04_qwen3vl"),
+    # Pair 2 again at the BENCHMARK observation spec — both cameras, 152 tokens.
+    # This is the pair that answers H1 without the single-view asymmetry, and
+    # the pair where the offline/online dissociation reverses sign, so the
+    # diagnostics have to cover it for that reversal to be explicable.
+    "groot2v":   ("exp05", "asset/runs/libero/exp05_groot_2view"),
+    "qwen3vl2v": ("exp06", "asset/runs/libero/exp06_qwen3vl_2view"),
 }
+
+# ALOHA transfer-cube: the same GR00T-vs-stock contrast on a bimanual 14-DOF
+# embodiment, where the closed-loop verdict FLIPS (+9.5 pts, p=0.0067, against
+# LIBERO's 2.5 pts at p=0.40). Running the identical battery here is what makes
+# the two datasets comparable — any diagnostic that differs between them is a
+# candidate explanation for the flip.
+ARMS_ALOHA = {
+    "groot_aloha":   ("exp05", "asset/runs/aloha/exp05_groot_transfer"),
+    "qwen3vl_aloha": ("exp06", "asset/runs/aloha/exp06_qwen3vl_transfer"),
+}
+
+ARMS_BY_DS = {"libero": ARMS_LIBERO, "aloha": ARMS_ALOHA}
+
+# plots_head_latents.py and plots_raw_vs_adapted.py import ARMS at module load and
+# are LIBERO-only, so the name keeps its original meaning rather than following
+# --dataset. Anything dataset-aware must go through ARMS_BY_DS instead.
+ARMS = ARMS_LIBERO
 N_FRAMES = 2000        # held-out frames used by every analysis
 BATCH    = 50
 SEED     = 0
@@ -113,7 +141,41 @@ def stride(rows: np.ndarray, n: int) -> np.ndarray:
     return rows[np.linspace(0, len(rows) - 1, n).astype(int)]
 
 
-def frame_labels() -> tuple[np.ndarray, np.ndarray, list[str]]:
+def frame_labels_aloha() -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """ALOHA per-frame task index and within-episode phase.
+
+    Rebuilds AlohaDataset's index order — the file-NNN.parquet shards concatenated
+    and sorted by `index` — reading only the episode column, so no video decoding
+    is needed. Row i here is row i in the cache.
+
+    Transfer-cube is a SINGLE task with a SINGLE fixed instruction, so task_idx is
+    constant. That is not an oversight: it is why the text-ablation prediction for
+    this dataset is ~1.0x, and why any task-discriminative analysis (silhouette,
+    per-task loss) is undefined here and must be dropped rather than reported as
+    a null. Phase remains meaningful and carries the handover analysis.
+    """
+    import glob
+
+    import pandas as pd
+    from configs.registry import get_config
+
+    cfg = get_config("aloha", "exp05")
+    shards = sorted(glob.glob(str(
+        Path(cfg.dataset_root) / "data" / "chunk-000" / "file-*.parquet")))
+    df = pd.concat([pd.read_parquet(f, columns=["index", "episode_index"])
+                    for f in shards], ignore_index=True)
+    df = df.sort_values("index").reset_index(drop=True)
+
+    ep = df["episode_index"].to_numpy()
+    phase = np.zeros(len(ep), dtype=np.float32)
+    # Episodes are contiguous after the index sort; phase is position within one.
+    bounds = np.flatnonzero(np.diff(ep)) + 1
+    for a, b in zip(np.r_[0, bounds], np.r_[bounds, len(ep)]):
+        phase[a:b] = np.arange(b - a) / max(b - a - 1, 1)
+    return np.zeros(len(ep), dtype=np.int64), phase, [cfg.task_text]
+
+
+def frame_labels_libero() -> tuple[np.ndarray, np.ndarray, list[str]]:
     """Per-frame task index and within-episode phase, without decoding images.
 
     Rebuilds LiberoDataset's index order (sorted files, then demos sorted by
@@ -136,6 +198,11 @@ def frame_labels() -> tuple[np.ndarray, np.ndarray, list[str]]:
     return np.asarray(task_idx), np.asarray(phase, dtype=np.float32), names
 
 
+def frame_labels() -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Dispatch to the active dataset's label builder."""
+    return (frame_labels_aloha() if DATASET == "aloha" else frame_labels_libero())
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Model / data loading
 # ──────────────────────────────────────────────────────────────────────────────
@@ -144,7 +211,7 @@ def load_arm(exp: str, run_dir: str, ckpt: str = "best.pt"):
     from configs.registry import get_config
     from models.vla_train import VLATrainModel
 
-    cfg = get_config("libero", exp)
+    cfg = get_config(DATASET, exp)
     model = VLATrainModel(cfg)
     ck = torch.load(ROOT / run_dir / "checkpoints" / ckpt,
                     map_location="cpu", weights_only=False)
@@ -395,8 +462,13 @@ def phase_task_loss(model, h5path, rows, task_idx, phase, names):
 # 6 — checkpoint ladder, open-loop correlation
 # ──────────────────────────────────────────────────────────────────────────────
 
-def per_dim_error(model, h5path, rows):
+def per_dim_error(model, h5path, rows, action_dim: int = 7, dim_names=None):
     """Open-loop action error per action dimension, absolute and scale-relative.
+
+    action_dim MUST come from the config. This was hard-coded to 7 for LIBERO;
+    on ALOHA's 14-DOF bimanual action that reshape does not raise (the element
+    count is still divisible) but it INTERLEAVES two different joints into every
+    reported column, so the per-dim numbers are silently wrong rather than absent.
 
     The dataset's seven OSC dims differ in scale by up to 17x: translation std
     ~0.37-0.48, rotation std 0.055-0.101, gripper 0.956. We train an unweighted
@@ -415,9 +487,11 @@ def per_dim_error(model, h5path, rows):
                                img_mask=msk.to(DEVICE))
             P.append(out.cpu().numpy())
             G.append(act.numpy())
-    P = np.concatenate(P, 0).reshape(-1, 7)
-    G = np.concatenate(G, 0).reshape(-1, 7)
-    names = ["dx", "dy", "dz", "droll", "dpitch", "dyaw", "grip"]
+    P = np.concatenate(P, 0).reshape(-1, action_dim)
+    G = np.concatenate(G, 0).reshape(-1, action_dim)
+    names = dim_names or ["dx", "dy", "dz", "droll", "dpitch", "dyaw", "grip"]
+    if len(names) != action_dim:
+        names = [f"d{i:02d}" for i in range(action_dim)]
     out = {}
     for i, nm in enumerate(names):
         sd = float(G[:, i].std())
@@ -432,8 +506,12 @@ def per_dim_error(model, h5path, rows):
 
 
 def ckpt_ladder(exp, run_dir, h5path, rows):
-    ladder = ["epoch_0025.pt", "epoch_0050.pt", "epoch_0075.pt",
-              "epoch_0100.pt", "best.pt", "final.pt"]
+    # ALOHA trains to 300 epochs, LIBERO to 100; list both and skip what is absent.
+    # These epochs deliberately mirror the closed-loop ladder so the open-loop and
+    # rollout curves can be plotted against a common x-axis.
+    ladder = ["epoch_0025.pt", "epoch_0050.pt", "epoch_0075.pt", "epoch_0100.pt",
+              "epoch_0150.pt", "epoch_0200.pt", "epoch_0250.pt", "epoch_0300.pt",
+              "best.pt", "final.pt"]
     res = {}
     for name in ladder:
         p = ROOT / run_dir / "checkpoints" / name
@@ -468,13 +546,25 @@ def ckpt_ladder(exp, run_dir, h5path, rows):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def main() -> int:
+    global DATASET, OUT
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dataset", default="libero", choices=["libero", "aloha"])
+    args = ap.parse_args()
+    DATASET = args.dataset
+
+    ARMS = ARMS_BY_DS[DATASET]
+    first_arm = next(iter(ARMS))
+    OUT = OUT / DATASET
     OUT.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(SEED)
 
+    print(f"[0/6] dataset={DATASET} | arms={list(ARMS)}")
     print("[0/6] frame labels + shared validation subsample")
     task_idx, phase, names = frame_labels()
-    with h5py.File(ROOT / ARMS["pi05"][1] / "vlm_embeddings.h5", "r") as f:
+    with h5py.File(ROOT / ARMS[first_arm][1] / "vlm_embeddings.h5", "r") as f:
         n_total = f["embeddings"].shape[0]
         actions_all_src = f["actions"]
         states_all_src = f["states"]
@@ -513,7 +603,8 @@ def main() -> int:
         r["pe_sensitivity"] = pe_sensitivity(model, h5path, sub500)
 
         print("  [6/7] per-dimension action error")
-        r["per_dim_error"] = per_dim_error(model, h5path, sub500)
+        r["per_dim_error"] = per_dim_error(model, h5path, sub500,
+                                           action_dim=int(cfg.action_dim))
 
         if len(task_idx) == n_total:
             print("  [5/7] loss by phase and task")

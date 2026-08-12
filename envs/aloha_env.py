@@ -106,13 +106,19 @@ def annotate_frame(frame, ep, total_eps, step, max_steps, reward, max_reward, su
     return np.array(img.convert("RGB"))
 
 
-def run_episode(env, agent, cfg, ep_idx, total_eps, save_video, video_dir):
+def run_episode(env, agent, cfg, ep_idx, total_eps, save_video, video_dir,
+                seed_offset: int = 0):
     """Run one gym_aloha episode. Returns a result dict.
 
     max_coverage is reported as max_reward/4 so the generic evaluate.py summary
     (which averages 'max_coverage') reads as task-progress fraction for ALOHA.
+
+    seed_offset shifts the episode seed so a second run samples a DISJOINT set of
+    cube poses. AlohaEnv.reset derives the pose from this seed alone, so without
+    an offset a repeat run re-uses the same 200 initial scenes and is not an
+    independent replication — it would only resample the policy's own flow noise.
     """
-    obs, _ = env.reset(seed=ep_idx * 137 + 42)
+    obs, _ = env.reset(seed=(ep_idx + seed_offset) * 137 + 42)
     agent.reset()
     frames, max_reward, success, reward = [], 0, False, 0
     t0 = time.time()
