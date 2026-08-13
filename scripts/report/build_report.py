@@ -205,11 +205,55 @@ ablation cost ×11.94 vs ×11.64.</p>
      "(p = 0.40). Right: on bimanual ALOHA the identical backbone swap is worth +9.5 "
      "points (p = 0.0067). Error bars are Wilson 95% intervals.")}
 
+<h4>Why the backbone comparison is a null here</h4>
+
+<p>A 2.5-point aggregate gap is compatible with two different stories: the arms
+converged to behaviourally equivalent policies, or they behave differently and the
+differences cancel. Both testbeds are paired episode-for-episode — LIBERO by its
+50 fixed initial states, ALOHA by seed — so the two can be told apart.</p>
+
+<table>
+<tr><th></th><th class="n">Both succeed</th><th class="n">Both fail</th><th class="n">Only pretrained</th><th class="n">Only stock</th></tr>
+<tr class="hl"><td><strong>LIBERO 2-view</strong></td><td class="n">165</td><td class="n"><strong>4</strong></td><td class="n">18</td><td class="n">13</td></tr>
+<tr><td>ALOHA (for contrast)</td><td class="n">73</td><td class="n">55</td><td class="n">47</td><td class="n">25</td></tr>
+</table>
+
+<p>Three observations, in decreasing order of weight. <strong>(1) Little headroom
+remains</strong> — both arms sit at 89.0–91.5% while oracle-action replay through
+the same harness returns 90–92%. That is not a hard ceiling (the two-view arms
+beat the replay rate on two tasks) but the task is largely solved from the two
+camera views. <strong>(2) The head reaches the same solution from either
+backbone</strong> — wrist attention 51.6% vs 54.5%, wrist-ablation cost ×11.94 vs
+×11.64, text ablation 6.12× vs 5.39×, PE sensitivity 0.111 vs 0.097.
+<strong>(3) What remains is idiosyncratic, not systematic</strong> — only 4 of 200
+episodes defeat both arms, and 31 of the 35 failures are disjoint. ALOHA is the
+opposite: 55 shared failures, a real pool of hard scenes.</p>
+
+<div class="headline">
+<strong>What the null does not mean.</strong> The aggregate 2.5 points conceals
+per-task differences that cancel — task 9 favours the pretrained arm by 25 points,
+task 0 favours the stock arm by 20, four tasks are exactly tied, and the per-task
+correlation is only r&nbsp;=&nbsp;0.471.
+<br><br>
+These per-task gaps are <em>not resolved</em>: at n&nbsp;=&nbsp;20 per task the
+standard error on a difference is 9.4 points, so ±20 is about 2 SE and several
+excursions that size are expected across ten tasks by chance. The defensible
+statement is that the arms' differences <strong>do not accumulate in one
+direction</strong> — not that they behave identically task by task.
+</div>
+
 <div class="bound"><strong>Bounded to:</strong> one task suite (LIBERO-Goal) and
 one backbone pair. The single-view arms are reported for completeness but carry no
 claim — single-view puts the pretrained arm outside its trained input
 configuration while leaving the stock arm inside its own, an asymmetry pointing
-the same way as the result.</div>
+the same way as the result.
+<br><br>
+The headroom argument means this null is <em>partly a property of the benchmark</em>,
+not only of the backbone: a harder single-arm task with more room above 90% could
+still reveal a backbone effect. Cohen's kappa is computed by the analysis script
+(LIBERO +0.121, ALOHA +0.283) but carries no claim here — with both arms near 90%,
+"both fail" is four episodes and kappa swings on a handful of cases. The raw 2×2
+counts are the evidence.</div>
 </div>
 
 <h2>C2 · Pretraining's payoff is task-specific, at every stage of training</h2>

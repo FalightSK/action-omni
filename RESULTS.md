@@ -69,7 +69,60 @@ instruction, all ten tasks. Language is not decoration on this testbed.
 vs 54.5%, ablation cost ×11.94 vs ×11.64. Given different backbone weights, the
 head converges to the same solution.
 
-### 2.1 Checkpoint ladder — no pretraining advantage at any point in training
+### 2.1 Why the backbone comparison is a null here
+
+A 2.5-point aggregate gap is compatible with two different stories: the arms
+converged to behaviourally equivalent policies, or they behave differently and
+the differences cancel. Both testbeds are paired episode-for-episode — LIBERO by
+its 50 fixed initial states, ALOHA by seed — so the two can be told apart
+(`scripts/analysis/policy_agreement.py`).
+
+| | Both succeed | Both fail | Only pretrained | Only stock |
+|---|---|---|---|---|
+| **LIBERO 2-view** | 165 | **4** | 18 | 13 |
+| ALOHA | 73 | 55 | 47 | 25 |
+
+**Three observations, in decreasing order of how much weight they carry.**
+
+**1. Little headroom remains.** Both arms sit at 89.0–91.5% while oracle-action
+replay through the same harness returns 90–92% (§5). This is not a hard ceiling —
+the 2-view arms exceed the replay rate on two tasks — but it does mean the task is
+largely solved from the two camera views, leaving little for a backbone to
+contribute.
+
+**2. The head reaches the same solution from either backbone.** Every routing
+diagnostic on the two-view pair is near-identical: wrist attention 51.6% vs
+54.5%, wrist-ablation cost ×11.94 vs ×11.64, text ablation 6.12× vs 5.39×, PE
+sensitivity 0.111 vs 0.097. Different features in, the same policy out.
+
+**3. What remains is idiosyncratic, not systematic.** Only **4 of 200** episodes
+defeat both arms; of 35 total failures, 31 are disjoint. The residual failures do
+not look like a shared difficulty that a stronger backbone could resolve. ALOHA
+is the opposite: 55 episodes defeat both, a large pool of genuinely hard scenes.
+
+**What the null does NOT mean.** The aggregate 2.5 points conceals large per-task
+differences that cancel:
+
+| Task | Pretrained | Stock | Δ |
+|---|---|---|---|
+| 9 | 100% | 75% | **+25** |
+| 0 | 80% | 100% | **−20** |
+| 6 | 75% | 60% | +15 |
+| 2, 3, 4, 7 | — | — | 0.0 |
+
+Per-task correlation is r = 0.471 and mean |difference| is 8.5 points. **These
+per-task gaps are not resolved**: at n = 20 per task the standard error on a
+difference is 9.4 points, so ±20 is about 2 SE and several excursions that size
+are expected across ten tasks by chance. The defensible statement is that the two
+arms' differences **do not accumulate in one direction**, not that they behave
+identically task by task.
+
+**Method caution.** Cohen's κ is reported by the script (LIBERO +0.121, ALOHA
++0.283) but should not carry a claim: with both LIBERO arms near 90%, "both fail"
+is four episodes and κ swings on a handful of cases. The raw 2×2 counts are the
+evidence.
+
+### 2.2 Checkpoint ladder — no pretraining advantage at any point in training
 
 Pairing here is exact and needs no seed offset: `envs/libero_env.py` loads
 LIBERO's 50 **fixed** initial states per task, so every snapshot of every arm
@@ -110,7 +163,7 @@ Worth recording: `best.pt` is epoch 111 for both arms with validation loss
 that deserves a line given how much weight §4.1's offline-blindness result
 carries.
 
-### 2.2 Pretraining's payoff is task-specific
+### 2.3 Pretraining's payoff is task-specific
 
 Placing the two ladders side by side is the cleanest cross-testbed statement the
 study supports:
