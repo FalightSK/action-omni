@@ -145,7 +145,7 @@ interact to decide whether a policy actually succeeds in the loop.</p>
 <tr><td>C1</td><td>A camera matters far more than a pretrained backbone</td><td class="n">+29.0 vs +2.5 pts</td></tr>
 <tr><td>C2</td><td>Pretraining helps on one task and not the other, at every stage of training</td><td class="n">+9.5 pts, p = 0.0067</td></tr>
 <tr><td>C3</td><td>The whole advantage sits in one transition</td><td class="n">p = 0.0009</td></tr>
-<tr><td>C4</td><td>The gap is in failure rate, not kind — so offline metrics miss it</td><td class="n">&lt;2% vs 15.5%</td></tr>
+<tr><td>C4</td><td>The stock policy never opens the receiving gripper — and offline metrics miss it</td><td class="n">26.2% vs 14.5%</td></tr>
 <tr><td>C5</td><td>Language ablation has a floor that must be measured</td><td class="n">1.14–1.24×</td></tr>
 <tr><td>C6</td><td>Visual reliance tracks what the action is defined relative to</td><td class="n">0.038 vs 0.11</td></tr>
 </table>
@@ -313,12 +313,13 @@ cost — a method other closed-loop studies can adopt directly.</p>
 generalises to other multi-stage manipulation tasks is untested.</div>
 </div>
 
-<h2>C4 · The gap is in failure rate, not failure kind</h2>
+<h2>C4 · The stock policy fails to initiate the receive</h2>
 
 <div class="claim">
 <div class="claim-id">Claim 4</div>
 <p class="claim-title">Offline metrics cannot rank these policies — and the
-instrumented rollouts show exactly why.</p>
+instrumented rollouts show what is physically different: the stock policy never
+opens the receiving gripper.</p>
 
 <h4>Evidence — the blindness</h4>
 <table>
@@ -343,21 +344,30 @@ action, the reward timeline and per-replan attention. Arm identity was
 successful episodes. Classifying episodes that lifted the cube but failed the
 handover:</p>
 
+<p>The receiving gripper rests <strong>closed</strong> (~0.19) and opens to ~0.96 —
+verified from the trajectories, not assumed. The receive sequence is
+<strong>open → cube arrives → close on it</strong>, so the three ways it can fail
+are: never open, open but never close, or close on nothing. As a rate over all
+episodes that reached the lift:</p>
+
 <table>
-<tr><th>Failure class</th><th class="n">GR00T</th><th class="n">Qwen3-VL</th><th class="n">p</th></tr>
-<tr><td>premature receiver close</td><td class="n">59.6% (31)</td><td class="n">59.4% (41)</td><td class="n"><strong>0.98</strong></td></tr>
-<tr><td>receiver never engaged</td><td class="n">19.2% (10)</td><td class="n">26.1% (18)</td><td class="n">0.38</td></tr>
-<tr><td>grasp lost after lift</td><td class="n">21.2% (11)</td><td class="n">14.5% (10)</td><td class="n">0.34</td></tr>
-<tr class="hl"><td><strong>total lifted-but-failed</strong></td><td class="n"><strong>52</strong></td><td class="n"><strong>69</strong></td><td class="n">—</td></tr>
+<tr><th>Failure mode</th><th class="n">GR00T</th><th class="n">Qwen3-VL</th><th class="n">p</th></tr>
+<tr class="hl"><td><strong>receiving gripper never opens</strong></td><td class="n"><strong>14.5%</strong></td><td class="n"><strong>26.2%</strong></td><td class="n"><strong>0.0068</strong></td></tr>
+<tr><td>opened but never closed</td><td class="n">13.3%</td><td class="n">9.3%</td><td class="n">0.24</td></tr>
+<tr><td>closed on nothing</td><td class="n">2.3%</td><td class="n">4.7%</td><td class="n">0.24</td></tr>
 </table>
 
 <div class="headline">
-The failure <strong>mix is statistically identical; only the count differs</strong>
-— 33% more of the same failure. Two policies that fail the same way, differing
-only in how often they enter an unrecoverable configuration, leave
-<strong>no per-step action-error signature</strong>. The difference is a
-compounding closed-loop property, not a per-step accuracy property — exactly what
-an error averaged over a 16-step chunk and 2,000 frames cannot see.
+<strong>One failure mode carries the whole gap.</strong> The stock arm's excess of
+never-opened episodes is <strong>+11.7 points</strong>, against a total
+P(handover&nbsp;|&nbsp;lift) gap of <strong>11.9 points</strong>. The other two
+modes run slightly the other way.
+<br><br>
+The stock policy does not aim badly, mistime the grasp, or drop the cube more
+often. It <strong>fails to initiate the receive at all</strong> — the receiving
+gripper stays closed while the episode times out. That is why per-step action
+error is blind to it: one dimension of fourteen, held at a plausible constant, in
+a chunk whose other thirteen dimensions are fine.
 </div>
 
 <p>Attention was recorded <strong>during rollout</strong>, not on dataset frames:
@@ -365,7 +375,10 @@ dataset frames are successful expert demonstrations and cannot be linked to the
 policy's own failures. Over the five replans after the lift the stock arm
 allocates less mass to image tokens — 0.8407 vs 0.8663 in successful episodes
 (Welch t&nbsp;=&nbsp;9.01) and 0.8380 vs 0.8546 in failed ones
-(t&nbsp;=&nbsp;5.24), both p&nbsp;&lt;&nbsp;10<sup>−4</sup>.</p>
+(t&nbsp;=&nbsp;5.24), both p&nbsp;&lt;&nbsp;10<sup>−4</sup>. The cue to open the
+receiving gripper is <em>visual</em>, and the stock arm weights that channel less
+in exactly that window — a coherent reading of two measurements, not a
+demonstrated causal chain.</p>
 
 <h4>Figures</h4>
 {img("fig4_offline_blindness.png",
@@ -373,18 +386,25 @@ allocates less mass to image tokens — 0.8407 vs 0.8663 in successful episodes
      "closed-loop result. Four accuracy measures sit inside the ±2% band.")}
 
 {img("fig5_failure_taxonomy.png",
-     "Instrumented rollouts. Left: the failure mix is identical. Centre: only the count "
-     "differs. Right: image attention during the handover window, split by outcome so "
-     "the comparison cannot be an artifact of failed episodes running longer.")}
+     "Instrumented rollouts. Left: the stock arm's failures concentrate in one mode -- "
+     "the receiving gripper never opens. Centre: total handover failures. Right: image "
+     "attention during the handover window, split by outcome so the comparison cannot be "
+     "an artifact of failed episodes running longer.")}
 
 <div class="bound"><strong>Bounded to:</strong> these are correlational
 measurements on frozen checkpoints; they locate where two policies differ but
-cannot prove the difference causes the gap. The absolute class proportions depend
-on the gripper-closure threshold, though the between-arm comparison — 59.6% vs
-59.4% — does not. And because the attention difference appears in successful
-episodes too, it is a stable policy-level habit, <em>not</em> a signature of
-impending failure; it must not be described as the policy recognising
-anything.</div>
+cannot prove the difference causes the gap. Because the attention difference
+appears in successful episodes too, it is a stable policy-level habit,
+<em>not</em> a signature of impending failure; it must not be described as the
+policy recognising anything.
+<br><br>
+<strong>Correction on record:</strong> an earlier version of this analysis
+reported "premature receiver close" as the dominant failure for both arms
+(59.6% vs 59.4%, p = 0.98) and concluded the failure mix was identical. That was
+an artifact — the classifier had the gripper polarity backwards and tested for
+"closed most of the post-lift window", which is the gripper's default state
+(closed 84% of all timesteps), so it fired for nearly every episode of both arms.
+The corrected classification above finds the mixes differ.</div>
 </div>
 
 <h2>C5 · Language ablation has a floor that must be measured</h2>
@@ -524,8 +544,10 @@ halves the epochs to any target, and leaves a replicated +9.5-point advantage th
 localises to a single transition.
 <br><br>
 Throughout, the offline metrics these systems are trained on and selected by
-failed to rank the resulting policies — and the instrumented rollouts show why:
-the policies fail in the same way, differing only in how often.
+failed to rank the resulting policies — and the instrumented rollouts show what
+they were missing: the stock policy never opens the receiving gripper, one
+dimension of fourteen held at a plausible constant while the other thirteen
+behave normally.
 </div>
 
 <p class="meta">Full design, statistics and defect log: <code>RESULTS.md</code> ·

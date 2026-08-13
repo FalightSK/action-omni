@@ -127,6 +127,12 @@ Four accuracy measures are flat against a gap resolved at p = 0.0067 with a
 mechanism at p = 0.0009. Selecting a backbone or a checkpoint by flow-matching
 loss would have carried no information about which policy is better.
 
+Instrumented rollouts identify the physical failure: the stock policy's receiving
+gripper **never opens** in 26.2% of lifted episodes against the pretrained arm's
+14.5% (p = 0.0068). That +11.7-point excess accounts for essentially the entire
+11.9-point P(handover | lift) gap — the policy does not aim badly, it fails to
+initiate the receive at all.
+
 ### 5. Action space determines how much the policy uses vision
 
 Zeroing the 2D positional encoding shifts actions by **0.097–0.111** on LIBERO

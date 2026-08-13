@@ -260,32 +260,43 @@ the reward timeline, and per-replan attention. Arm identity was **measured, not
 assumed** — the picking arm is whichever 7-DOF block moves first in successful
 episodes (dims 7–13; receiver 0–6, receiving gripper dim 6).
 
-Classifying episodes that lifted the cube but never completed the handover:
+The receiving gripper **rests closed (~0.19) and opens to ~0.96** — verified from
+the trajectories, not assumed. The receive sequence is therefore
+**open → cube arrives → close on it**, and the three ways it can fail are: never
+open, open but never close, or close on nothing.
 
-| Failure class | GR00T | Qwen3-VL | p |
+Classifying episodes that lifted the cube but never completed the handover, as a
+rate over all episodes that reached the lift:
+
+| Failure mode | GR00T | Qwen3-VL | p |
 |---|---|---|---|
-| premature receiver close | 59.6% (31) | 59.4% (41) | **0.98** |
-| receiver never engaged | 19.2% (10) | 26.1% (18) | 0.38 |
-| grasp lost after lift | 21.2% (11) | 14.5% (10) | 0.34 |
-| **total lifted-but-failed** | **52** | **69** | — |
+| **receiving gripper never opens** | **14.5%** | **26.2%** | **0.0068** |
+| opened but never closed | 13.3% | 9.3% | 0.24 |
+| closed on nothing | 2.3% | 4.7% | 0.24 |
 
-**The failure mix is statistically identical; only the count differs** — 69
-against 52, 33% more of the same failure. The pre-registered expectation was that
-the stock arm would fail *differently* (systematically premature gripper
-closures). It does not. Premature closure is the dominant failure for **both**
-arms and this task; the stock arm simply arrives there more often.
+**One failure mode carries the whole gap.** The stock arm's excess of
+never-opened episodes is **+11.7 points**, against a total P(handover | lift)
+gap of **11.9 points**. The other two modes run slightly the *other* way.
 
-This is the direct answer to why offline metrics miss the gap. If the two
-policies fail in the same way and differ only in *how often* they enter an
-unrecoverable configuration, there is no systematic per-step action-error
-signature to detect. The difference is a compounding, closed-loop property, not a
-per-step accuracy property — precisely what an error averaged over a 16-step
-chunk and 2,000 frames cannot see.
+The stock policy does not aim badly, mistime the grasp, or drop the cube more
+often. It **fails to initiate the receive at all** — the receiving gripper stays
+closed while the episode times out.
 
-Caveat: the absolute class proportions depend on the gripper-closure threshold
-(25% of each run's own observed range). The between-arm comparison is what the
-claim rests on, and 59.6% vs 59.4% is far too close for a threshold choice to
-have manufactured it.
+That is consistent with the attention result below and suggests a mechanism: the
+cue to open the receiving gripper is *visual* (the cube lifted and approaching),
+and the stock arm allocates measurably less attention to image tokens in exactly
+that window. Less weight on the cue, more often missed, no phase transition.
+Stated as a coherent reading of two measurements, not as a demonstrated causal
+chain.
+
+**Correction.** An earlier version of this section reported "premature receiver
+close" as the dominant failure for both arms at 59.6% vs 59.4% (p = 0.98), and
+concluded the failure mix was identical. That was an artifact: the classifier had
+the gripper polarity backwards and tested for "closed most of the post-lift
+window", which is the gripper's **default state** — it sits closed for 84% of all
+timesteps. The test fired for nearly every episode of both arms and manufactured
+a null. The corrected classification above finds the mixes differ, at p = 0.0068
+on the mode that matters.
 
 ### 4.1c Attention during the handover, measured in the loop
 

@@ -342,8 +342,8 @@ def fig4():
 # ──────────────────────────────────────────────────────────────────────────────
 def fig5():
     tax = json.loads((ANA / "failure_taxonomy" / "failure_taxonomy.json").read_text())
-    cats = ["premature_receiver_close", "receiver_never_engaged", "grasp_lost_after_lift"]
-    short = ["premature\nreceiver close", "receiver\nnever engaged", "grasp lost\nafter lift"]
+    cats = ["receiver_never_opened", "opened_never_closed", "closed_on_nothing"]
+    short = ["receiver gripper\nNEVER OPENS", "opened but\nnever closed", "closed on\nnothing"]
 
     fig, axes = plt.subplots(1, 3, figsize=(13.0, 3.9))
 
@@ -359,7 +359,8 @@ def fig5():
     ax.set_xticks(xs, short, fontsize=8.4)
     ax.set_ylabel("% of lifted-but-failed episodes")
     ax.set_ylim(0, 76)
-    ax.set_title("Failure KIND is identical\n59.6% vs 59.4%,  $p = 0.98$",
+    ax.set_title("The stock arm fails to INITIATE the receive\n"
+                 "26.2% vs 14.5% of lifted episodes,  $p = 0.0068$",
                  fontsize=9.8, loc="left")
     ax.legend(frameon=False, fontsize=8.8)
 
@@ -376,7 +377,7 @@ def fig5():
                 fontsize=8.6, color=INK)
     ax.set_xticks([0, 1], ["GR00T", "Qwen3-VL"])
     ax.set_ylabel("episodes (of 200)")
-    ax.set_title("Failure COUNT differs\n33% more of the same failure",
+    ax.set_title("Total handover failures\n69 vs 52 of 200 episodes",
                  fontsize=9.8, loc="left")
 
     ax = _style(axes[2])
@@ -391,10 +392,10 @@ def fig5():
     ax.set_ylim(0.80, 0.886)
     ax.set_title("Stock attends less to image —\nin successes too ($p<10^{-4}$)",
                  fontsize=9.8, loc="left")
-    ax.legend(frameon=False, fontsize=8.8, loc="lower right")
+    ax.legend(frameon=False, fontsize=8.8, loc="upper right")
 
-    fig.suptitle("The gap is in failure RATE, not failure KIND — which is why "
-                 "per-step error cannot see it", fontsize=11, x=0.006, ha="left")
+    fig.suptitle("The stock policy fails to initiate the receive — it never opens "
+                 "the receiving gripper", fontsize=11, x=0.006, ha="left")
     fig.tight_layout(rect=(0, 0, 1, 0.92))
     fig.savefig(FIG / "fig5_failure_taxonomy.png", bbox_inches="tight")
     plt.close(fig)

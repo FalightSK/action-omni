@@ -80,17 +80,27 @@ def identify_arms(eps) -> tuple[slice, slice, int, int]:
 
 
 def classify(eps, pick, recv, pg, rg) -> dict:
-    """Classify episodes that reached lift (reward>=2) but never reached 4."""
-    # Gripper thresholds from this run's own observed range, so no dependence on
-    # the simulator's unit convention.
-    allg = np.concatenate([e["state"][:, rg] for e in eps])
-    lo, hi = np.percentile(allg, 10), np.percentile(allg, 90)
-    closed_thr = lo + 0.25 * (hi - lo)
+    """Classify episodes that reached lift (reward>=2) but never reached 4.
 
-    counts = {"no_lift": 0, "receiver_never_engaged": 0,
-              "premature_receiver_close": 0, "grasp_lost_after_lift": 0,
-              "contested_timeout": 0, "success": 0}
-    detail = []
+    GRIPPER SEMANTICS, verified from the trajectories rather than assumed. The
+    receiving gripper (dim 6) rests near 0.19 and rises to ~0.96; the picking
+    gripper (dim 13) opens to ~0.97 to approach and closes to ~0.65 to hold the
+    cube. HIGH = OPEN. An earlier version of this function had it backwards and
+    classified "closed for most of the post-lift window", which is the gripper's
+    DEFAULT state (closed 84% of all timesteps) rather than a failure -- so it
+    fired for nearly every episode of both arms and manufactured a null.
+
+    The receive sequence is OPEN -> cube arrives -> CLOSE on it. The three ways
+    it can fail are therefore: never open, open but never close, or close on
+    nothing.
+    """
+    allg = np.concatenate([e["state"][:, rg] for e in eps])
+    lo, hi = np.percentile(allg, 5), np.percentile(allg, 95)
+    open_thr = lo + 0.6 * (hi - lo)
+
+    counts = {"success": 0, "never_lifted": 0, "receiver_never_opened": 0,
+              "opened_never_closed": 0, "closed_on_nothing": 0}
+    open_latency = []
 
     for e in eps:
         r = e["reward"].astype(int)
@@ -98,37 +108,23 @@ def classify(eps, pick, recv, pg, rg) -> dict:
             counts["success"] += 1
             continue
         if r.max() < 2:
-            counts["no_lift"] += 1
+            counts["never_lifted"] += 1
             continue
-
         t_lift = int(np.argmax(r >= 2))
-        post = e["state"][t_lift:]
-        if len(post) < 5:
-            counts["contested_timeout"] += 1
+        g = e["state"][t_lift:, rg]
+        opened = np.flatnonzero(g > open_thr)
+        if len(opened) == 0:
+            counts["receiver_never_opened"] += 1
             continue
-
-        recv_motion = float(np.abs(np.diff(post[:, recv], axis=0)).sum())
-        grip = post[:, rg]
-        closed_frac = float((grip < closed_thr).mean())
-        # "Premature" = the receiving gripper spends most of the post-lift window
-        # closed, i.e. it shut before there was anything to receive and stayed shut.
-        premature = closed_frac > 0.6
-        lost = bool((r[t_lift:] < 2).any())
-
-        if recv_motion < 0.5:
-            k = "receiver_never_engaged"
-        elif premature:
-            k = "premature_receiver_close"
-        elif lost:
-            k = "grasp_lost_after_lift"
+        open_latency.append(int(opened[0]))
+        if (g[opened[0]:] < open_thr).any():
+            counts["closed_on_nothing"] += 1
         else:
-            k = "contested_timeout"
-        counts[k] += 1
-        detail.append({"t_lift": t_lift, "recv_motion": recv_motion,
-                       "closed_frac": closed_frac, "class": k})
+            counts["opened_never_closed"] += 1
 
-    return {"counts": counts, "closed_thr": float(closed_thr),
-            "n_detail": len(detail)}
+    return {"counts": counts, "open_thr": float(open_thr),
+            "open_latency_median": float(np.median(open_latency))
+            if open_latency else float("nan")}
 
 
 def attention_by_phase(eps, horizon: int = 8) -> dict:
@@ -175,15 +171,15 @@ def main() -> int:
 
         c = cls["counts"]
         tot = sum(c.values())
-        lifted_fail = tot - c["success"] - c["no_lift"]
+        lifted_fail = tot - c["success"] - c["never_lifted"]
         print(f"\n===== {name}   n={tot}")
         print(f"  picker dims {pick.start}-{pick.stop-1} | "
               f"receiver dims {recv.start}-{recv.stop-1} | "
               f"receiver gripper dim {rg}")
-        print(f"  success {c['success']}  |  never lifted {c['no_lift']}  |  "
+        print(f"  success {c['success']}  |  never lifted {c['never_lifted']}  |  "
               f"lifted-but-failed {lifted_fail}")
-        for k in ("receiver_never_engaged", "premature_receiver_close",
-                  "grasp_lost_after_lift", "contested_timeout"):
+        for k in ("receiver_never_opened", "opened_never_closed",
+                  "closed_on_nothing"):
             pct = 100.0 * c[k] / max(lifted_fail, 1)
             print(f"    {k:26s} {c[k]:4d}   ({pct:5.1f}% of lifted-but-failed)")
         a = att
