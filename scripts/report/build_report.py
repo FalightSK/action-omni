@@ -28,7 +28,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-FIG = ROOT / "asset" / "analysis" / "head_diagnostics" / "aloha" / "figures"
+# The final numbered set from plots_paper.py, not the exploratory figures that
+# accumulated under head_diagnostics/ as results arrived.
+FIG = ROOT / "asset" / "analysis" / "paper_figures"
 # report/ is at the repo root, NOT under asset/ — asset/ is gitignored, and a
 # report that only exists on the machine that built it is not a deliverable.
 # Both outputs are self-contained (figures inlined), so two tracked files carry
@@ -53,7 +55,7 @@ def img(name: str, caption: str) -> str:
     p = FIG / name
     if not p.exists():
         return (f'<figure class="missing"><div>MISSING FIGURE: {name}<br>'
-                f'<small>run scripts/analysis/plots_head_diagnostics_aloha.py</small>'
+                f'<small>run scripts/analysis/plots_paper.py</small>'
                 f'</div><figcaption>{caption}</figcaption></figure>')
     b64 = base64.b64encode(p.read_bytes()).decode("ascii")
     return (f'<figure><img src="data:image/png;base64,{b64}" alt="{caption}">'
@@ -163,6 +165,12 @@ than by weights.</p>
 
 <h2>2. Cameras dominate backbones</h2>
 
+{img("fig1_main_result.png",
+     "The study in one figure. Left: on LIBERO-Goal a second camera is worth +29.0 "
+     "points while swapping the backbone at that same observation spec is worth 2.5 "
+     "(p = 0.40). Right: on bimanual ALOHA the identical backbone swap is worth +9.5 "
+     "points (p = 0.0067). Error bars are Wilson 95% intervals.")}
+
 <p>LIBERO-Goal: 10 goals over one fixed scene, 200 rollouts per arm.</p>
 
 <table>
@@ -205,6 +213,12 @@ is a genuine replication rather than a resampling of the policy's own noise.</p>
 
 <h3>The gap is one transition, not general competence</h3>
 
+{img("fig2_stage_decomposition.png",
+     "Left: both arms reach contact and lift at the same rate — the curves separate only "
+     "at the final transition. Right: the same data as conditional probabilities. "
+     "P(handover | lift) carries the entire gap at p = 0.0009, tighter than the "
+     "top-line result.")}
+
 <p>ALOHA scores touch / lift / handover / success. <code>max_reward == 3</code>
 never occurs in 800 episodes, so once the receiving gripper contacts the cube the
 episode always completes, and the ladder is touch → lift → handover.</p>
@@ -223,11 +237,10 @@ result.</p>
 
 <h2>4. Speed or skill?</h2>
 
-{img("figA5_ladder.png",
-     "Closed-loop checkpoint ladder, paired seeds, 50 episodes per point. Left: the "
-     "pretrained arm leads at every checkpoint and the stock arm scores 0/50 through "
-     "epoch 50. Right: epochs required to reach a given success rate. Dashed lines mark "
-     "the n=400 anchors — the ladder establishes the shape, the pooled runs the magnitude.")}
+<p>The pooled numbers describe the ceiling only. The claim usually made for robot
+pretraining is sample efficiency, which needs the whole curve. Six snapshots per
+arm, 50 episodes each, <strong>paired</strong>: every evaluation sees the same 50
+cube poses, so scene difficulty cancels between conditions.</p>
 
 <table>
 <tr><th class="n">Epoch</th><th class="n">25</th><th class="n">50</th><th class="n">100</th><th class="n">150</th><th class="n">200</th><th class="n">300</th></tr>
@@ -245,7 +258,7 @@ epochs 25 and 50 while the pretrained arm is at 28% (McNemar p&nbsp;=&nbsp;0.000
 
 <h3>The same ladder on LIBERO points the other way</h3>
 
-{img("figA6_ladder_both.png",
+{img("fig3_checkpoint_ladders.png",
      "Both checkpoint ladders on a common axis. Left: on bimanual ALOHA the pretrained "
      "arm leads at every checkpoint and the stock arm cannot do the task at all before "
      "epoch 100. Right: on single-arm LIBERO-Goal the stock arm leads at epoch 25 and "
@@ -295,7 +308,7 @@ episodes/task against the headline's 20, so it sees half the initial states.
 
 <h2>5. Offline metrics cannot rank these policies</h2>
 
-{img("figA2_dissociation.png",
+{img("fig4_offline_blindness.png",
      "Every offline diagnostic expressed as a between-arm difference, on the same axis "
      "as the closed-loop result. Four accuracy measures are flat against a gap resolved "
      "at p = 0.0067. Attention allocation is the only offline quantity that moves.")}
@@ -311,16 +324,16 @@ arm spends 5.2% less mass on image tokens and correspondingly more on text token
 that carry zero information on this task. Correlational, one testbed — the only
 surviving mechanistic candidate, not a finding.</p>
 
-{img("figA4_phase_perdim.png",
-     "Left: velocity loss by episode phase. The handover window is hardest for both arms "
-     "and equally so. Right: per-dimension open-loop error across all 14 joints — no "
-     "arm-specific deficit survives.")}
+<p>Loss by episode phase shows the objective <em>does</em> know the handover is
+hard — 0.0295 against 0.0161 late — it simply does not know that one arm is worse
+at it. Per-dimension open-loop error across all 14 joints shows no arm-specific
+deficit either.</p>
 
 <h2>6. Two measurement lessons</h2>
 
 <h3>Text ablation has a floor, and it must be measured</h3>
 
-{img("figA1_text_ablation_floor.png",
+{img("fig6_text_ablation_floor.png",
      "Text-ablation ratio across all six arms. ALOHA has a single fixed instruction, so "
      "its 1.14–1.24x is the cost of the perturbation alone — the floor against which the "
      "LIBERO ratios must be read.")}
@@ -337,7 +350,7 @@ what the instruction supplied becomes recoverable from vision.</p>
 
 <h3>What is physically different, if the action error is not?</h3>
 
-{img("figA7_failure_taxonomy.png",
+{img("fig5_failure_taxonomy.png",
      "Instrumented rollouts, n=200 per arm. Left: among episodes that lifted the cube "
      "but failed the handover, the failure MIX is statistically identical. Centre: only "
      "the count differs. Right: image-attention mass during the handover window, split "
@@ -410,7 +423,7 @@ degrees of freedom or arm count.</p>
 
 <h3>Action space determines how much the policy uses vision</h3>
 
-{img("figA3_routing.png",
+{img("fig7_action_space.png",
      "Left and centre: cross-attention mass and entropy across the six DiT blocks. "
      "Right: PE sensitivity across all six arms — joint-space control needs image "
      "position far less than end-effector control does.")}
@@ -465,7 +478,82 @@ condition the standard error is 3.3 points, so a null means "no detectable
 difference at this readout capacity," never "no difference."</li>
 </ul>
 
-<h2>9. Summary</h2>
+<h2>9. Contributions, as claimed</h2>
+
+<p>Each is stated at the strength the evidence supports, with the figure that
+carries it and the limitation that bounds it. This section is the intended
+starting point for the manuscript.</p>
+
+<div class="key">
+<strong>C1 · Observation configuration outweighs backbone pretraining on
+single-arm manipulation.</strong> Under a fixed head, read depth and rollout
+protocol, a wrist camera is worth +21.0 to +29.0 points
+(p&nbsp;&lt;&nbsp;10<sup>−7</sup>); replacing a stock VLM with its robot-pretrained
+descendant is worth +2.5 (p&nbsp;=&nbsp;0.40) at the benchmark's own two-camera
+spec. <em>fig1</em> · Bounded to: LIBERO-Goal, one backbone pair.
+</div>
+
+<div class="key">
+<strong>C2 · Robot pretraining is task-dependent, not a general
+sample-efficiency prior.</strong> On bimanual transfer-cube the stock backbone
+scores 0/50 through epoch 50 while the pretrained arm reaches 28% (McNemar
+p&nbsp;=&nbsp;0.0001), needs ~2× the epochs to reach any rate, and remains +9.5
+points behind at convergence (p&nbsp;=&nbsp;0.0067, n&nbsp;=&nbsp;400/arm across
+disjoint seed ranges). The identical ladder on LIBERO shows no advantage at any
+checkpoint. <em>fig1, fig3</em> · Bounded to: the two testbeds differ on six axes
+at once, so bimanual coordination is one candidate explanation among several this
+design cannot separate.
+</div>
+
+<div class="key">
+<strong>C3 · Stage decomposition localises the effect to one transition.</strong>
+Contact and lift show no difference (p&nbsp;=&nbsp;0.11, 0.22, both running
+slightly against the pretrained arm); the entire gap sits in
+P(handover&nbsp;|&nbsp;lift) — 71.6% vs 59.7%, p&nbsp;=&nbsp;0.0009, tighter than
+the top-line result. Decomposing along the environment's own reward ladder
+converts an aggregate difference into a mechanism at no extra rollout cost.
+<em>fig2</em>
+</div>
+
+<div class="key">
+<strong>C4 · The gap is in failure rate, not failure kind — which is why offline
+metrics cannot see it.</strong> Velocity loss (+0.1%), open-loop nMAE (−0.4%) and
+PE sensitivity (+1.1%) all differ by under 2% between policies separated by 15.5%
+relative success. Instrumented rollouts show why: the failure <em>mix</em> is
+statistically identical (premature receiver-gripper closure 59.6% vs 59.4%,
+p&nbsp;=&nbsp;0.98) and only the count differs. Two policies failing the same way,
+differing only in how often they enter an unrecoverable configuration, leave no
+per-step action-error signature. <em>fig4, fig5</em> · Bounded to: correlational;
+class proportions depend on the gripper threshold, though the between-arm
+comparison does not.
+</div>
+
+<div class="key">
+<strong>C5 · The text-ablation floor, a control language-ablation studies
+omit.</strong> Zeroing text on a single-instruction task removes no information
+yet still costs 1.14×–1.24× — the perturbation cost alone. Ablation ratios must be
+read against this floor, not against 1.0. Measured so, ten-instruction policies
+read 5.4×–7.4×, and two-view arms depend on language measurably <em>less</em> than
+one-view arms, consistent with a wrist camera recovering what the instruction
+previously had to supply. The control costs one run on any single-instruction
+dataset. <em>fig6</em>
+</div>
+
+<div class="key">
+<strong>C6 · Visual spatial reliance tracks what the action is defined relative
+to.</strong> Zeroing the positional encoding shifts actions 0.097–0.111 under
+end-effector control but 0.038 under joint control with full proprioception. The
+obvious objection — that ALOHA's scene is simply visually simpler — is ruled out:
+arm configuration is equally readable from image tokens on both testbeds (R²
+0.830 vs 0.804), and ALOHA reaches that from 54 image tokens against LIBERO's 128.
+Action recoverability from one frame is −0.20 vs +0.76, identifying the operative
+variable as deltas-versus-absolute-targets rather than degrees of freedom or arm
+count. <em>fig7</em> · Bounded to: the action-recoverability contrast is partly
+definitional and is reported as explaining the PE result, not as independent
+evidence for it.
+</div>
+
+<h2>10. Summary</h2>
 
 <div class="key">
 Robot pretraining of a frozen VLM backbone is <strong>not a general
