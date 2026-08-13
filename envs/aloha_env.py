@@ -37,11 +37,19 @@ class AlohaAgent:
     HARD CONSTRAINT: state = joint positions (env observation) only.
     """
 
-    def __init__(self, vlm, train_model, cfg, device) -> None:
+    def __init__(self, vlm, train_model, cfg, device, record_attn: bool = False) -> None:
         self.vlm         = vlm
         self.train_model = train_model
         self.cfg         = cfg
         self.device      = device
+
+        # Attention is recorded DURING ROLLOUT, not on dataset frames. The
+        # distinction matters: dataset frames are successful expert
+        # demonstrations, so attention measured there cannot be linked to the
+        # policy's own failures. Only a rollout trace can.
+        self.record_attn = record_attn
+        self.attn_trace: list[float] = []     # image mass, one entry per replan
+        self._attn_buf: list = []
 
         self.action_mean = np.array(cfg.action_mean, dtype=np.float32)
         self.action_std  = np.array(cfg.action_std,  dtype=np.float32)
@@ -51,9 +59,38 @@ class AlohaAgent:
         self._buffer: list[np.ndarray] = []
         self.replan_count = 0
 
+        if record_attn:
+            self._wrap_cross_attn()
+
+    def _wrap_cross_attn(self) -> None:
+        """Expose cross-attention weights.
+
+        DiTBlock calls nn.MultiheadAttention without need_weights, so the
+        weights are discarded before we could see them. Wrap each cross_attn
+        forward to request and buffer them. Same technique as
+        scripts/analysis/head_diagnostics.py::cross_attention.
+        """
+        import torch as _t
+        blocks = [b for b in self.train_model.decoder.blocks
+                  if getattr(b, "has_cross", False)]
+        for b in blocks:
+            mod = b.cross_attn
+            orig = mod.forward
+
+            def fwd(q, k, v, *a, _orig=orig, **kw):
+                kw.pop("need_weights", None)
+                kw.pop("average_attn_weights", None)
+                o, w = _orig(q, k, v, *a, need_weights=True,
+                             average_attn_weights=True, **kw)
+                self._attn_buf.append(w.detach().float().cpu())
+                return o, w
+            mod.forward = fwd
+
     def reset(self) -> None:
         self._buffer = []
         self.replan_count = 0
+        self.attn_trace = []
+        self._attn_buf = []
 
     def _norm_state(self, s: np.ndarray) -> np.ndarray:
         return (s - self.state_mean) / (self.state_std + 1e-8)
@@ -82,6 +119,19 @@ class AlohaAgent:
         self._buffer       = [self._denorm_action(a).astype(np.float32) for a in acts]
         self.replan_count += 1
 
+        if self.record_attn and self._attn_buf:
+            # sample() runs num_flow_steps passes through every cross-attn block,
+            # so the buffer holds (blocks x steps) weight tensors for this replan.
+            # Average them all: one image-mass scalar per replan.
+            im = img_mask[0].detach().cpu().numpy().astype(bool)
+            masses = []
+            for w in self._attn_buf:
+                a = w.mean(dim=(0, 1)).numpy()
+                a = a / max(a.sum(), 1e-9)
+                masses.append(float(a[im].sum()))
+            self.attn_trace.append(float(np.mean(masses)))
+            self._attn_buf = []
+
     def act(self, image: Image.Image, state: np.ndarray) -> np.ndarray:
         if not self._buffer:
             self._replan(image, state)
@@ -107,7 +157,7 @@ def annotate_frame(frame, ep, total_eps, step, max_steps, reward, max_reward, su
 
 
 def run_episode(env, agent, cfg, ep_idx, total_eps, save_video, video_dir,
-                seed_offset: int = 0):
+                seed_offset: int = 0, trace: bool = False):
     """Run one gym_aloha episode. Returns a result dict.
 
     max_coverage is reported as max_reward/4 so the generic evaluate.py summary
@@ -124,16 +174,29 @@ def run_episode(env, agent, cfg, ep_idx, total_eps, save_video, video_dir,
     t0 = time.time()
     step = 0
 
+    # Per-step trace for the failure taxonomy. The aggregate result dict records
+    # only max_reward, which says an episode failed but not HOW: whether the
+    # receiving gripper closed early, whether the arms never met, or whether
+    # contact was made and lost. Those are different failures and the taxonomy
+    # needs the timeline to tell them apart.
+    tr_state, tr_action, tr_reward = [], [], []
+
     for step in range(cfg.sim_max_steps):
         rgb    = np.asarray(obs["pixels"]["top"])
         image  = resize_frame(rgb, cfg.aloha_img_w, cfg.aloha_img_h)
         state  = np.asarray(obs["agent_pos"], dtype=np.float32)
         action = agent.act(image, state)
 
+        if trace:
+            tr_state.append(state.copy())
+            tr_action.append(np.asarray(action, dtype=np.float32).copy())
+
         obs, reward, terminated, truncated, info = env.step(action.astype(np.float32))
         reward     = int(reward)
         max_reward = max(max_reward, reward)
         success    = bool(info.get("is_success", reward >= 4))
+        if trace:
+            tr_reward.append(reward)
 
         if save_video:
             frames.append(annotate_frame(env.render(), ep_idx, total_eps,
@@ -154,7 +217,7 @@ def run_episode(env, agent, cfg, ep_idx, total_eps, save_video, video_dir,
     tag = "SUCCESS" if success else "failed "
     print(f"  Ep {ep_idx+1:2d}/{total_eps} | {tag} | max_reward={max_reward}/4 | "
           f"steps={step+1} | replans={agent.replan_count} | {elapsed:.0f}s")
-    return {
+    out = {
         "episode": ep_idx + 1,
         "steps": step + 1,
         "max_reward": max_reward,
@@ -164,3 +227,12 @@ def run_episode(env, agent, cfg, ep_idx, total_eps, save_video, video_dir,
         "replan_count": agent.replan_count,
         "elapsed_sec": round(elapsed, 1),
     }
+    if trace:
+        out["_trace"] = {
+            "state":  np.asarray(tr_state,  dtype=np.float32),   # (T, 14)
+            "action": np.asarray(tr_action, dtype=np.float32),   # (T, 14)
+            "reward": np.asarray(tr_reward, dtype=np.int8),      # (T,)
+            "attn_image_mass": np.asarray(getattr(agent, "attn_trace", []),
+                                          dtype=np.float32),     # (n_replans,)
+        }
+    return out

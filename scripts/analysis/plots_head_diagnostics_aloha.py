@@ -397,12 +397,80 @@ def figA6():
     plt.close(fig)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# figA7 — failure taxonomy + time-indexed attention
+# ──────────────────────────────────────────────────────────────────────────────
+
+def figA7():
+    tax = json.loads((ROOT / "asset" / "analysis" / "failure_taxonomy"
+                      / "failure_taxonomy.json").read_text())
+    fig, axes = plt.subplots(1, 3, figsize=(13.2, 3.9))
+
+    # Panel 1 — failure MIX. The point is that the two distributions coincide.
+    ax = _style(axes[0])
+    cats = ["premature_receiver_close", "receiver_never_engaged",
+            "grasp_lost_after_lift"]
+    short = ["premature\nreceiver close", "receiver\nnever engaged", "grasp lost\nafter lift"]
+    xs = np.arange(len(cats))
+    for i, (name, col) in enumerate([("GR00T", PRE), ("Qwen3-VL", STOCK)]):
+        c = tax[name]["counts"]
+        tot = sum(c[k] for k in cats)
+        v = [100.0 * c[k] / tot for k in cats]
+        ax.bar(xs + (i - 0.5) * 0.36, v, 0.34, color=col, label=name, zorder=3)
+        for xi, vv in zip(xs + (i - 0.5) * 0.36, v):
+            ax.text(xi, vv + 1.2, f"{vv:.0f}%", ha="center", fontsize=8, color=INK)
+    ax.set_xticks(xs, short, fontsize=8)
+    ax.set_ylabel("% of lifted-but-failed episodes")
+    ax.set_ylim(0, 78)
+    ax.set_title("Failure MIX is identical\n(premature close: 59.6% vs 59.4%, p = 0.98)",
+                 fontsize=9.5, loc="left")
+    ax.legend(frameon=False, fontsize=8.5)
+
+    # Panel 2 — failure COUNT. Same mix, more of it.
+    ax = _style(axes[1])
+    xs = np.arange(2)
+    for i, (name, col) in enumerate([("GR00T", PRE), ("Qwen3-VL", STOCK)]):
+        c = tax[name]["counts"]
+        lifted_fail = sum(c[k] for k in cats)
+        ax.bar([i], [c["success"]], 0.5, color=col, zorder=3)
+        ax.bar([i], [lifted_fail], 0.5, bottom=[c["success"]],
+               color=col, alpha=0.38, zorder=3, hatch="//")
+        ax.text(i, c["success"] / 2, f"{c['success']}\nsuccess", ha="center",
+                fontsize=8.5, color="white", fontweight="bold")
+        ax.text(i, c["success"] + lifted_fail / 2, f"{lifted_fail}\nhandover\nfailures",
+                ha="center", fontsize=8.5, color=INK)
+    ax.set_xticks(xs, ["GR00T", "Qwen3-VL"])
+    ax.set_ylabel("episodes (of 200)")
+    ax.set_title("Failure COUNT differs\nsame kind of failure, 33% more of it",
+                 fontsize=9.5, loc="left")
+
+    # Panel 3 — attention in the handover window, split by outcome so the
+    # comparison cannot be an artifact of failed episodes running longer.
+    ax = _style(axes[2])
+    vals = {"GR00T": (0.8663, 0.8546), "Qwen3-VL": (0.8407, 0.8380)}
+    xs = np.arange(2)
+    for i, (name, col) in enumerate([("GR00T", PRE), ("Qwen3-VL", STOCK)]):
+        ax.bar(xs + (i - 0.5) * 0.36, vals[name], 0.34, color=col, label=name, zorder=3)
+        for xi, vv in zip(xs + (i - 0.5) * 0.36, vals[name]):
+            ax.text(xi, vv + 0.002, f"{vv:.3f}", ha="center", fontsize=8, color=INK)
+    ax.set_xticks(xs, ["successful\nepisodes", "failed\nepisodes"])
+    ax.set_ylabel("image attention mass, handover window")
+    ax.set_ylim(0.80, 0.885)
+    ax.set_title("Stock arm attends less to image —\nin successes too (p < 10⁻⁴ both)",
+                 fontsize=9.5, loc="left")
+    ax.legend(frameon=False, fontsize=8.5, loc="lower right")
+
+    fig.tight_layout()
+    fig.savefig(FIG / "figA7_failure_taxonomy.png", bbox_inches="tight")
+    plt.close(fig)
+
+
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     FIG.mkdir(parents=True, exist_ok=True)
     A = json.loads(DIAG_ALOHA.read_text())
     L = json.loads(DIAG_LIBERO.read_text())
-    figA1(A, L); figA2(A); figA3(A, L); figA4(A); figA5(); figA6()
+    figA1(A, L); figA2(A); figA3(A, L); figA4(A); figA5(); figA6(); figA7()
     for p in sorted(FIG.glob("*.png")):
         print(f"  wrote {p}")
     return 0

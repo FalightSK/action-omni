@@ -335,6 +335,79 @@ ablation ratio without its floor overstates the effect.</p>
 arms (5.39×/6.12× against 7.05×/7.41×): with a wrist camera available, some of
 what the instruction supplied becomes recoverable from vision.</p>
 
+<h3>What is physically different, if the action error is not?</h3>
+
+{img("figA7_failure_taxonomy.png",
+     "Instrumented rollouts, n=200 per arm. Left: among episodes that lifted the cube "
+     "but failed the handover, the failure MIX is statistically identical. Centre: only "
+     "the count differs. Right: image-attention mass during the handover window, split "
+     "by outcome so the comparison cannot be an artifact of failed episodes running longer.")}
+
+<p>The aggregate result records <code>max_reward</code>, which reports that an
+episode failed but not how. Instrumented rollouts log per-step 14-DOF state,
+commanded action, the reward timeline and per-replan attention. Arm identity was
+measured rather than assumed — the picking arm is whichever block moves first in
+successful episodes.</p>
+
+<table>
+<tr><th>Failure class</th><th class="n">GR00T</th><th class="n">Qwen3-VL</th><th class="n">p</th></tr>
+<tr><td>premature receiver close</td><td class="n">59.6% (31)</td><td class="n">59.4% (41)</td><td class="n"><strong>0.98</strong></td></tr>
+<tr><td>receiver never engaged</td><td class="n">19.2% (10)</td><td class="n">26.1% (18)</td><td class="n">0.38</td></tr>
+<tr><td>grasp lost after lift</td><td class="n">21.2% (11)</td><td class="n">14.5% (10)</td><td class="n">0.34</td></tr>
+<tr class="hl"><td><strong>total lifted-but-failed</strong></td><td class="n"><strong>52</strong></td><td class="n"><strong>69</strong></td><td class="n">—</td></tr>
+</table>
+
+<div class="key">
+<strong>The failure mix is identical; only the count differs.</strong> The stock
+arm does not fail <em>differently</em> — it fails 33% more often in the same way.
+Premature closure of the receiving gripper is the dominant failure for both arms
+and this task.
+<br><br>
+This answers why offline metrics miss the gap. If two policies fail the same way
+and differ only in how often they enter an unrecoverable configuration, there is
+no systematic per-step action-error signature to detect. The difference is a
+compounding closed-loop property, not a per-step accuracy property — exactly what
+an error averaged over a 16-step chunk and 2,000 frames cannot see.
+</div>
+
+<p>Attention was recorded <strong>during rollout</strong>, not on dataset frames:
+dataset frames are successful expert demonstrations, so attention measured there
+cannot be linked to the policy&#39;s own failures. Over the five replans following
+the lift, the stock arm allocates less mass to image tokens — 0.8407 vs 0.8663 in
+successful episodes (Welch t&nbsp;=&nbsp;9.01) and 0.8380 vs 0.8546 in failed ones
+(t&nbsp;=&nbsp;5.24), both p&nbsp;&lt;&nbsp;10⁻⁴. Because the difference is present
+in successes too, it is a stable policy-level difference in how the head uses its
+backbone, <em>not</em> a signature of impending failure.</p>
+
+<h3>The scene is not information-poor</h3>
+
+<p>The positional-encoding result invites an objection: perhaps ALOHA&#39;s single
+fixed camera simply carries less spatial information. A gradient or Jacobian
+analysis cannot settle this — an impoverished scene produces low image
+sensitivity under either explanation. A cross-validated probe from image tokens
+alone to arm state can.</p>
+
+<table>
+<tr><th>Arm</th><th class="n">Image tokens</th><th class="n">R²(arm state)</th><th class="n">R²(action)</th></tr>
+<tr><td>LIBERO GR00T 2-view</td><td class="n">128</td><td class="n">0.832</td><td class="n">−0.215</td></tr>
+<tr><td>LIBERO Qwen3-VL 2-view</td><td class="n">128</td><td class="n">0.828</td><td class="n">−0.192</td></tr>
+<tr><td>ALOHA GR00T</td><td class="n">54</td><td class="n">0.817</td><td class="n">0.771</td></tr>
+<tr><td>ALOHA Qwen3-VL</td><td class="n">54</td><td class="n">0.791</td><td class="n">0.743</td></tr>
+</table>
+
+<p>Arm configuration is <strong>equally readable on both testbeds</strong> (0.830
+vs 0.804), and ALOHA reaches that from 54 image tokens against LIBERO&#39;s 128. The
+&ldquo;visually simpler&rdquo; objection has no support.</p>
+
+<p>The second column sharpens the mechanism: action recoverability from one frame
+is −0.20 on LIBERO against +0.76 on ALOHA. LIBERO commands end-effector
+<em>deltas</em>, which a single frame does not determine; ALOHA commands
+<em>absolute joint targets</em>, which sit close to the pose the image already
+encodes. This is partly definitional, so it is reported as <em>explaining</em> the
+PE result rather than as independent evidence — what it establishes is that the
+operative variable is <strong>what the action is defined relative to</strong>, not
+degrees of freedom or arm count.</p>
+
 <h3>Action space determines how much the policy uses vision</h3>
 
 {img("figA3_routing.png",

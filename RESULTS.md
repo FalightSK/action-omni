@@ -250,6 +250,103 @@ spends 5.2% less mass on image tokens and correspondingly more on text tokens
 that carry zero information on this task. Correlational, one testbed; the only
 surviving mechanistic candidate, not a finding.
 
+### 4.1b Failure taxonomy — the gap is in rate, not in kind
+
+If open-loop action error is identical, what is physically different? The
+aggregate result dict cannot say: it records `max_reward`, which reports *that*
+an episode failed, not *how*. Instrumented rollouts (`evaluate.py --trace`,
+n = 200 per arm on run 1's seeds) log per-step 14-DOF state, commanded action,
+the reward timeline, and per-replan attention. Arm identity was **measured, not
+assumed** — the picking arm is whichever 7-DOF block moves first in successful
+episodes (dims 7–13; receiver 0–6, receiving gripper dim 6).
+
+Classifying episodes that lifted the cube but never completed the handover:
+
+| Failure class | GR00T | Qwen3-VL | p |
+|---|---|---|---|
+| premature receiver close | 59.6% (31) | 59.4% (41) | **0.98** |
+| receiver never engaged | 19.2% (10) | 26.1% (18) | 0.38 |
+| grasp lost after lift | 21.2% (11) | 14.5% (10) | 0.34 |
+| **total lifted-but-failed** | **52** | **69** | — |
+
+**The failure mix is statistically identical; only the count differs** — 69
+against 52, 33% more of the same failure. The pre-registered expectation was that
+the stock arm would fail *differently* (systematically premature gripper
+closures). It does not. Premature closure is the dominant failure for **both**
+arms and this task; the stock arm simply arrives there more often.
+
+This is the direct answer to why offline metrics miss the gap. If the two
+policies fail in the same way and differ only in *how often* they enter an
+unrecoverable configuration, there is no systematic per-step action-error
+signature to detect. The difference is a compounding, closed-loop property, not a
+per-step accuracy property — precisely what an error averaged over a 16-step
+chunk and 2,000 frames cannot see.
+
+Caveat: the absolute class proportions depend on the gripper-closure threshold
+(25% of each run's own observed range). The between-arm comparison is what the
+claim rests on, and 59.6% vs 59.4% is far too close for a threshold choice to
+have manufactured it.
+
+### 4.1c Attention during the handover, measured in the loop
+
+Attention here is recorded **during rollout**, not on dataset frames. The
+distinction is essential: dataset frames are successful expert demonstrations, so
+attention measured there cannot be linked to the policy's own failures.
+
+Image-attention mass over the five replans following the lift, split by outcome
+so the comparison cannot be an artifact of failed episodes running longer:
+
+| Outcome | GR00T | Qwen3-VL | Welch t | p |
+|---|---|---|---|---|
+| successful episodes | 0.8663 | 0.8407 | +9.01 | < 10⁻⁴ |
+| failed episodes | 0.8546 | 0.8380 | +5.24 | < 10⁻⁴ |
+
+The stock arm allocates consistently less mass to image tokens during the
+handover — and it does so **in successful episodes too**. This is a stable
+policy-level difference in how the head uses its backbone, not a signature of
+impending failure, and it must not be described as the policy "recognising" that
+its representation is inadequate.
+
+A secondary observation, weaker: within failed episodes, attention decays further
+over the ten replans after the handover window — by 0.0104 (GR00T) against 0.0356
+(Qwen3-VL). Reported as a trend; no test was run on the difference of
+differences.
+
+### 4.1d The scene is not information-poor
+
+The PE-sensitivity result invites an alternative explanation: ALOHA's single
+fixed camera and plain table may simply carry less spatial information. A
+gradient or Jacobian analysis cannot separate this from the action-space
+account — an impoverished scene produces low image sensitivity under either.
+
+`scripts/analysis/spatial_information_probe.py` asks instead how much spatial
+information the image tokens *contain*, independent of whether the policy uses
+it: a cross-validated probe from mean-pooled **image tokens only** (text
+excluded) to arm state, with R² computed per target dimension and averaged so a
+14-D target is not penalised against a 9-D one.
+
+| Arm | Image tokens | R²(arm state) | R²(action) |
+|---|---|---|---|
+| LIBERO GR00T 2-view | 128 | 0.832 | −0.215 |
+| LIBERO Qwen3-VL 2-view | 128 | 0.828 | −0.192 |
+| ALOHA GR00T | 54 | 0.817 | 0.771 |
+| ALOHA Qwen3-VL | 54 | 0.791 | 0.743 |
+
+**Arm configuration is equally readable on both testbeds** — 0.830 vs 0.804 — and
+ALOHA reaches that from **54 image tokens against LIBERO's 128**. Its scene is not
+information-poor, so "visually simpler" does not explain the lower PE
+sensitivity.
+
+The second column sharpens the mechanism. Action recoverability from a single
+frame is **−0.20 on LIBERO against +0.76 on ALOHA**: LIBERO commands
+end-effector *deltas*, which one frame does not determine, while ALOHA commands
+*absolute joint targets*, which sit close to the pose the image already encodes.
+This is partly definitional — absolute targets are near the current state by
+construction — so it is reported as *explaining* the PE result rather than as
+independent evidence for it. What it establishes is that the operative variable
+is **what the action is defined relative to**, not degrees of freedom or arm
+count.
+
 ### 4.2 Text ablation has a floor, and it must be measured
 
 ALOHA has a single fixed instruction, so zeroing its text tokens removes no task

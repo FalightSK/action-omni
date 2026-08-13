@@ -74,7 +74,7 @@ def _run_pusht(cfg, vlm_model, train_model, device, n_ep, save_video, output_pat
 
 
 def _run_aloha(cfg, vlm_model, train_model, device, n_ep, save_video, output_path,
-               seed_offset: int = 0):
+               seed_offset: int = 0, trace_path=None):
     from envs.aloha_env import AlohaAgent, run_episode
     import gymnasium as gym
     import gym_aloha  # noqa
@@ -82,7 +82,8 @@ def _run_aloha(cfg, vlm_model, train_model, device, n_ep, save_video, output_pat
     video_dir = Path(cfg.output_dir) / "videos"
     video_dir.mkdir(parents=True, exist_ok=True)
 
-    agent = AlohaAgent(vlm_model, train_model, cfg, device)
+    agent = AlohaAgent(vlm_model, train_model, cfg, device,
+                       record_attn=trace_path is not None)
     print(f"\n   Receding-horizon: predict {cfg.action_horizon} steps, "
           f"execute {cfg.inference_horizon} before re-plan")
     print("   Actions: ABSOLUTE 14-DOF joint targets")
@@ -92,11 +93,28 @@ def _run_aloha(cfg, vlm_model, train_model, device, n_ep, save_video, output_pat
                    max_episode_steps=cfg.sim_max_steps, disable_env_checker=True)
 
     print(f"\n[4/4] Running {n_ep} episodes ...\n")
-    results = []
+    results, traces = [], []
     for ep in range(n_ep):
-        results.append(run_episode(env, agent, cfg, ep, n_ep, save_video, video_dir,
-                                   seed_offset=seed_offset))
+        r = run_episode(env, agent, cfg, ep, n_ep, save_video, video_dir,
+                        seed_offset=seed_offset, trace=trace_path is not None)
+        if trace_path is not None:
+            traces.append(r.pop("_trace"))
+        results.append(r)
     env.close()
+
+    if trace_path is not None:
+        # Ragged per-episode arrays -> one npz with an index, rather than 200
+        # files. Episodes terminate at different steps, so they cannot be stacked.
+        import numpy as _np
+        flat = {}
+        for i, t in enumerate(traces):
+            for k, v in t.items():
+                flat[f"ep{i:04d}_{k}"] = v
+        flat["n_episodes"] = _np.asarray([len(traces)])
+        Path(trace_path).parent.mkdir(parents=True, exist_ok=True)
+        _np.savez_compressed(trace_path, **flat)
+        print(f"   trace -> {trace_path}")
+
     return results
 
 
@@ -138,6 +156,11 @@ def main() -> None:
                         help="Override checkpoint path (default: <output_dir>/checkpoints/best.pt)")
     parser.add_argument("--episodes",         type=int, default=None,
                         help="Number of eval episodes (default: cfg.sim_episodes, recommend 50+)")
+    parser.add_argument("--trace",            type=str, default=None,
+                        help="ALOHA only: write per-step state/action/reward and "
+                             "per-replan attention mass to this .npz. Needed for "
+                             "the failure taxonomy; the summary JSON keeps only "
+                             "aggregates and cannot say HOW an episode failed.")
     parser.add_argument("--seed-offset",      type=int, default=0,
                         help="ALOHA only: shift episode seeds so a repeat run "
                              "samples DISJOINT cube poses. Needed for a genuine "
@@ -203,7 +226,8 @@ def main() -> None:
         results = _run_aloha(cfg, vlm_model, train_model, device,
                              n_ep, not args.no_video,
                              Path(args.output) if args.output else None,
-                             seed_offset=args.seed_offset)
+                             seed_offset=args.seed_offset,
+                             trace_path=args.trace)
     elif args.dataset == "language_table":
         results = _run_language_table(cfg, vlm_model, train_model, device,
                                       n_ep, not args.no_video,
