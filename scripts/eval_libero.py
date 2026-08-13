@@ -69,6 +69,10 @@ def main() -> int:
     ap.add_argument("--tasks", nargs="+", type=int, default=None,
                     help="task indices; default all 10")
     ap.add_argument("--checkpoint", default="best.pt")
+    # Without this every run writes out_dir/eval_libero.json, so a checkpoint
+    # ladder would overwrite the headline result once per snapshot.
+    ap.add_argument("--output", default=None,
+                    help="Override results path (default: <output_dir>/eval_libero.json)")
     ap.add_argument("--videos", type=int, default=2,
                     help="record this many episodes per (task, condition)")
     ap.add_argument("--device", default="cuda")
@@ -175,7 +179,8 @@ def main() -> int:
         delta = "--" if cond == a.conditions[0] else f"{sr - base:+.1%}"
         print(f"{cond:<12}{sr:>8.1%}{delta:>14}{moved:>8.0%}{grip:>14.1f}")
 
-    dst = out_dir / "eval_libero.json"
+    dst = Path(a.output) if a.output else out_dir / "eval_libero.json"
+    dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_text(json.dumps(
         {"checkpoint": str(ckpt), "episodes": a.episodes,
          "conditions": a.conditions, "results": results}, indent=2), encoding="utf-8")

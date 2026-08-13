@@ -112,7 +112,7 @@ BODY = f"""
 
 <h1>What robot pretraining buys a vision-language-action model</h1>
 <p class="sub">A controlled component-interaction study across two embodiments</p>
-<p class="meta">Six arms · one frozen-backbone head · 1,800 closed-loop rollouts ·
+<p class="meta">Six arms · one frozen-backbone head · 2,600 closed-loop rollouts ·
 LIBERO-Goal and ALOHA transfer-cube</p>
 
 <p class="lede">Existing work studies how to choose data and how to choose a
@@ -129,8 +129,10 @@ worth 2.5 points (p&nbsp;=&nbsp;0.40).</li>
 <li><strong>That null is bounded.</strong> On a bimanual task the same backbone
 swap is worth <strong>+9.5 points (p&nbsp;=&nbsp;0.0067)</strong>, and the entire
 gap is one transition — P(handover&nbsp;|&nbsp;lift), p&nbsp;=&nbsp;0.0009.</li>
-<li><strong>Pretraining buys ~2× training efficiency</strong>, and the gap does
-not close by epoch 300 — so it buys both speed and a residual advantage.</li>
+<li><strong>Pretraining buys ~2× training efficiency on the bimanual task</strong>
+and the gap does not close by epoch 300 — but the same ladder on LIBERO shows no
+advantage at any checkpoint, so this is <em>not</em> a general
+sample-efficiency prior.</li>
 <li><strong>Offline metrics cannot rank these policies.</strong> On the bimanual
 pair they are not merely weak predictors; they carry no signal at all.</li>
 </ol>
@@ -241,6 +243,40 @@ epochs 25 and 50 while the pretrained arm is at 28% (McNemar p&nbsp;=&nbsp;0.000
 <li>The gap <strong>does not close</strong> by epoch 300.</li>
 </ul>
 
+<h3>The same ladder on LIBERO points the other way</h3>
+
+{img("figA6_ladder_both.png",
+     "Both checkpoint ladders on a common axis. Left: on bimanual ALOHA the pretrained "
+     "arm leads at every checkpoint and the stock arm cannot do the task at all before "
+     "epoch 100. Right: on single-arm LIBERO-Goal the stock arm leads at epoch 25 and "
+     "again at epoch 100. The early-training effect does not transfer.")}
+
+<table>
+<tr><th class="n">Epoch</th><th class="n">25</th><th class="n">50</th><th class="n">75</th><th class="n">100</th></tr>
+<tr><td class="pre">GR00T</td><td class="n">61.0%</td><td class="n">83.0%</td><td class="n">85.0%</td><td class="n">85.0%</td></tr>
+<tr><td class="stock">Qwen3-VL</td><td class="n"><strong>77.0%</strong></td><td class="n">78.0%</td><td class="n">89.0%</td><td class="n"><strong>95.0%</strong></td></tr>
+</table>
+
+<p>n&nbsp;=&nbsp;100 per point, canonical condition only. Pairing is exact and
+needs no seed offset — LIBERO supplies 50 <em>fixed</em> initial states per task,
+so every snapshot of every arm saw identical starts.</p>
+
+<p>At epoch 25 the <strong>stock</strong> arm leads by 16 points, the opposite of
+ALOHA, where the pretrained arm led 8% to 0% at the same epoch and 28% to 0% by
+epoch 50. <strong>ALOHA's early-training effect — the largest in this study — has
+no LIBERO counterpart.</strong></p>
+
+<div class="warn">
+<strong>Neither significant point survives correction.</strong> Four comparisons,
+Bonferroni bar 0.05/4&nbsp;=&nbsp;0.0125; the epoch-25 and epoch-100 gaps sit at
+p&nbsp;=&nbsp;0.0195 and 0.0213. The defensible statement is the negative one: no
+LIBERO checkpoint shows a pretraining advantage, and the two points that reach
+nominal significance both favour the stock arm. A prediction was registered
+before this run that the LIBERO curves would <em>converge early</em>; they do not
+converge, they cross. The conclusion survives in a stronger form than predicted,
+but that specific prediction failed.
+</div>
+
 <div class="warn">
 <strong>Why the ladder's magnitude is not quotable.</strong> Its 50 paired scenes
 are a fixed and slightly unrepresentative sample: at epoch 300 GR00T reads 66.0%
@@ -249,6 +285,12 @@ Each deviation sits inside one standard error (~6.7 points), so nothing is broke
 — but the ladder establishes the <em>shape</em> and the pooled n&nbsp;=&nbsp;400
 runs establish the <em>magnitude</em> (+9.5 points). The +24-point ladder gap is
 not the population gap.
+<br><br>
+The LIBERO ladder carries the same warning and disagrees with its headline in
+<em>both</em> directions: at epoch 100 GR00T reads 85.0% against the 91.5% anchor
+and Qwen3-VL 95.0% against 89.0%. Two causes — <code>best.pt</code> is epoch 111
+for both arms, past the ladder's last snapshot, and the ladder runs 10
+episodes/task against the headline's 20, so it sees half the initial states.
 </div>
 
 <h2>5. Offline metrics cannot rank these policies</h2>
@@ -353,10 +395,13 @@ difference at this readout capacity," never "no difference."</li>
 <h2>9. Summary</h2>
 
 <div class="key">
-Robot pretraining of a frozen VLM backbone acts as a <strong>training-efficiency
-prior</strong> whose payoff depends on task structure. On single-arm
-pick-and-place at the benchmark's own two-camera specification it contributes
-nothing measurable (2.5 points, p&nbsp;=&nbsp;0.40) while a second camera
+Robot pretraining of a frozen VLM backbone is <strong>not a general
+sample-efficiency prior</strong>. Its payoff is task-specific, and on the testbed
+where it fails it fails at every point in training, not only at convergence.
+<br><br>
+On single-arm pick-and-place at the benchmark's own two-camera specification it
+contributes nothing measurable — 2.5 points at p&nbsp;=&nbsp;0.40 at convergence,
+and no advantage at any checkpoint from epoch 25 onward — while a second camera
 contributes +21 to +29. On bimanual handover it makes the difference between 0%
 and 28% success at 50 epochs, cuts the epochs to any target by roughly half, and
 leaves a replicated +9.5-point advantage that localises to a single transition

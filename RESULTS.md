@@ -69,6 +69,71 @@ instruction, all ten tasks. Language is not decoration on this testbed.
 vs 54.5%, ablation cost ×11.94 vs ×11.64. Given different backbone weights, the
 head converges to the same solution.
 
+### 2.1 Checkpoint ladder — no pretraining advantage at any point in training
+
+Pairing here is exact and needs no seed offset: `envs/libero_env.py` loads
+LIBERO's 50 **fixed** initial states per task, so every snapshot of every arm
+sees an identical set of starts. Canonical condition only — the swapped
+condition returns 0/200 for every arm at every checkpoint measured, so including
+it would double the cost for no information.
+
+| Epoch | GR00T | Qwen3-VL | Gap | McNemar p |
+|---|---|---|---|---|
+| 25 | 61.0% | **77.0%** | **−16.0** | 0.0195 |
+| 50 | 83.0% | 78.0% | +5.0 | 0.4583 |
+| 75 | 85.0% | 89.0% | −4.0 | 0.5413 |
+| 100 | 85.0% | **95.0%** | **−10.0** | 0.0213 |
+
+n = 100 per point (10 tasks × 10 episodes).
+
+**Neither nominally significant point survives correction.** Four comparisons,
+Bonferroni bar 0.05/4 = 0.0125; the epoch-25 and epoch-100 gaps sit at 0.0195 and
+0.0213. The defensible statement is therefore the negative one: *no LIBERO
+checkpoint shows a pretraining advantage, and the two points that reach nominal
+significance both favour the **stock** arm.*
+
+**Anchor check.** As on ALOHA, the ladder's levels are not the headline's levels
+— and here they disagree in *both* directions:
+
+| | Ladder ep100 (n=100) | Headline best.pt (n=200) | Δ |
+|---|---|---|---|
+| GR00T | 85.0% | 91.5% | −6.5 |
+| Qwen3-VL | 95.0% | 89.0% | +6.0 |
+
+Two causes. `best.pt` is **epoch 111** for both arms, past the ladder's last
+snapshot; and the ladder runs 10 episodes/task against the headline's 20, so it
+sees only half the initial states. Read the ladder for **shape**, the n = 200
+headline for **magnitude**.
+
+Worth recording: `best.pt` is epoch 111 for both arms with validation loss
+**0.0352 for both**, identical to four decimal places. A coincidence, but one
+that deserves a line given how much weight §4.1's offline-blindness result
+carries.
+
+### 2.2 Pretraining's payoff is task-specific
+
+Placing the two ladders side by side is the cleanest cross-testbed statement the
+study supports:
+
+| | ALOHA (bimanual, 14-DOF) | LIBERO-Goal (single-arm, 2 cameras) |
+|---|---|---|
+| Epoch 25 | GR00T 8.0% vs stock **0.0%** | GR00T 61.0% vs stock **77.0%** |
+| Epoch 50 | GR00T 28.0% vs stock **0.0%** (p = 0.0001) | GR00T 83.0% vs stock 78.0% (p = 0.46) |
+| Late | gap persists (+20 at ep300) | stock ahead (+10 at ep100) |
+
+ALOHA's early-training effect — the largest in the study — has **no LIBERO
+counterpart**. Robot pretraining is therefore **not a general sample-efficiency
+prior**: on bimanual handover it is the difference between 0% and 28% success at
+50 epochs; on single-arm pick-and-place with two cameras it is absent at every
+checkpoint measured.
+
+This was pre-registered and got the direction wrong. The prediction on record was
+that the LIBERO curves would *converge early*, on the reasoning that the head
+learns this task fast enough that pretraining has nothing left to contribute.
+They do not converge — they cross, with the stock arm ahead at epoch 25. The
+conclusion survives in a stronger form than predicted, but the specific
+prediction failed.
+
 ---
 
 ## 3. ALOHA transfer-cube — the null is bounded

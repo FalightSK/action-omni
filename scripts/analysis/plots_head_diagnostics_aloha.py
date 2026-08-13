@@ -343,12 +343,66 @@ def figA5():
     plt.close(fig)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# figA6 — the two ladders side by side: pretraining's payoff is task-specific
+# ──────────────────────────────────────────────────────────────────────────────
+
+LIBERO_LADDER = {"groot": ("exp05_groot_2view", ["0025", "0050", "0075", "0100"]),
+                 "qwen":  ("exp06_qwen3vl_2view", ["0025", "0050", "0075", "0100"])}
+
+
+def _libero_ladder(key):
+    d, eps = LIBERO_LADDER[key]
+    xs, ys = [], []
+    for e in eps:
+        p = ROOT / "asset" / "runs" / "libero" / d / "ladder" / f"eval_epoch_{e}.json"
+        j = json.loads(p.read_text())
+        rs = [x for x in j["results"] if x["condition"] == "canonical"]
+        xs.append(int(e))
+        ys.append(100.0 * np.mean([bool(x["success"]) for x in rs]))
+    return xs, ys
+
+
+def figA6():
+    fig, axes = plt.subplots(1, 2, figsize=(11.2, 4.0), sharey=True)
+
+    ax = _style(axes[0])
+    for a in ARMS:
+        xs, ys = _ladder(a)
+        ax.plot(xs, ys, "o-", color=COL[a], lw=2.2, ms=6, label=SHORT[a])
+    ax.set_xlabel("training epoch"); ax.set_ylabel("closed-loop success rate (%)")
+    ax.set_ylim(-3, 100)
+    ax.set_title("ALOHA — bimanual, 14-DOF\n"
+                 "pretrained leads at EVERY checkpoint", fontsize=9.8, loc="left")
+    ax.legend(frameon=False, fontsize=8.5, loc="lower right")
+    ax.annotate("stock arm: 0/50", xy=(50, 0), xytext=(88, 11), fontsize=8.2,
+                color=INK, arrowprops=dict(arrowstyle="->", color=INK2, lw=1.0))
+
+    ax = _style(axes[1])
+    for key, col, lbl in [("groot", PRE, "GR00T"), ("qwen", STOCK, "Qwen3-VL")]:
+        xs, ys = _libero_ladder(key)
+        ax.plot(xs, ys, "o-", color=col, lw=2.2, ms=6, label=lbl)
+    ax.set_xlabel("training epoch")
+    ax.set_title("LIBERO-Goal — single-arm, 2 cameras\n"
+                 "STOCK leads at epoch 25, and at 100", fontsize=9.8, loc="left")
+    ax.legend(frameon=False, fontsize=8.5, loc="lower right")
+    ax.annotate("no pretraining advantage\nat any checkpoint",
+                xy=(25, 77), xytext=(42, 40), fontsize=8.2, color=INK,
+                arrowprops=dict(arrowstyle="->", color=INK2, lw=1.0))
+
+    fig.suptitle("Robot pretraining's payoff is task-specific, not a general "
+                 "sample-efficiency prior", fontsize=10.5, x=0.008, ha="left")
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.savefig(FIG / "figA6_ladder_both.png", bbox_inches="tight")
+    plt.close(fig)
+
+
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     FIG.mkdir(parents=True, exist_ok=True)
     A = json.loads(DIAG_ALOHA.read_text())
     L = json.loads(DIAG_LIBERO.read_text())
-    figA1(A, L); figA2(A); figA3(A, L); figA4(A); figA5()
+    figA1(A, L); figA2(A); figA3(A, L); figA4(A); figA5(); figA6()
     for p in sorted(FIG.glob("*.png")):
         print(f"  wrote {p}")
     return 0

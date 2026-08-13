@@ -92,6 +92,23 @@ given rate (2.4× / 2.8× / 2.2× / 1.9× at the 20/30/40/46% targets). The gap 
 not close by epoch 300, so pretraining buys both speed and a residual advantage
 — not speed alone.
 
+**But this does not generalise.** The same ladder on LIBERO-Goal (2-view arms,
+n = 100/point, identical fixed initial states) shows no pretraining advantage at
+any checkpoint:
+
+| Epoch | 25 | 50 | 75 | 100 |
+|---|---|---|---|---|
+| GR00T | 61.0% | 83.0% | 85.0% | 85.0% |
+| Qwen3-VL | **77.0%** | 78.0% | 89.0% | **95.0%** |
+
+At epoch 25 the *stock* arm leads by 16 points — the opposite of ALOHA. Neither
+nominally significant point (p = 0.0195, 0.0213) survives Bonferroni over the
+four comparisons, so the defensible claim is the negative one: no LIBERO
+checkpoint favours the pretrained backbone.
+
+**Robot pretraining is therefore not a general sample-efficiency prior** — its
+payoff is task-specific.
+
 ### 4. Offline metrics do not rank these policies
 
 On LIBERO, validation loss **anti-predicts** closed-loop success. On ALOHA it is
