@@ -503,10 +503,100 @@ def fig7():
     plt.close(fig)
 
 
+def fig8():
+    """Manifold drift: what separates the arms, and what does not.
+
+    Left carries the claim, right carries its limit. The middle panel's
+    successes-only bar is the one that matters -- comparing raw drift between
+    arms would only rediscover the success-rate gap, since a failing policy ends
+    up off-manifold whatever the cause.
+    """
+    D = json.loads((ANA / "drift" / "drift.json").read_text())
+    Z = np.load(ANA / "drift" / "drift_curves.npz", allow_pickle=True)
+    names = [str(Z["arm0_name"][0]), str(Z["arm1_name"][0])]
+    cols = [PRE, STOCK]
+
+    fig, axes = plt.subplots(1, 3, figsize=(13.0, 3.8))
+
+    # ---- left: drift accumulating, aligned to the lift -------------------
+    ax = _style(axes[0])
+    for i, (nm, c) in enumerate(zip(names, cols)):
+        x = Z[f"arm{i}_curve_offsets"]
+        m, se = Z[f"arm{i}_curve_mean"], Z[f"arm{i}_curve_se"]
+        ax.plot(x, m, color=c, lw=1.8, zorder=3,
+                label="pretrained" if i == 0 else "stock")
+        ax.fill_between(x, m - se, m + se, color=c, alpha=0.20, lw=0, zorder=2)
+    ax.axvline(0, color=INK2, lw=1.1, ls="--")
+    ax.axvspan(0, 40, color=RED, alpha=0.055, lw=0, zorder=1)
+    # axes-fraction y so the labels cannot fall outside the data range
+    ax.text(-4, 0.97, "lift", fontsize=8, color=INK2, va="top", ha="right",
+            transform=ax.get_xaxis_transform())
+    ax.text(20, 0.12, "receive\nwindow", ha="center", fontsize=7.8, color=RED,
+            transform=ax.get_xaxis_transform())
+    ax.set_xlabel("frames relative to the lift")
+    ax.set_ylabel("distance to nearest demo state")
+    ax.legend(frameon=False, fontsize=8.4, loc="upper left")
+    ax.set_title("The stock policy runs further from\nthe demonstrations throughout",
+                 fontsize=9.8, loc="left")
+
+    # ---- middle: the four contrasts, successes-only highlighted ----------
+    ax = _style(axes[1])
+    keys = [("drift_pre_lift", "pre-lift"), ("drift_at_lift", "at lift"),
+            ("drift_post_lift", "post-lift"), ("drift_post_lift_success_only",
+                                               "post-lift\nSUCCESSES only")]
+    pk = ["drift_pre_lift", "drift_at_lift", "drift_post_lift", None]
+    xs = np.arange(4)
+    w = 0.36
+    for j, (nm, c) in enumerate(zip(names, cols)):
+        v = [D[nm][k] for k, _ in keys]
+        ax.bar(xs + (j - 0.5) * w, v, w, color=c, zorder=3)
+    for i, (k, _) in enumerate(keys):
+        p = (D["between_arms"][pk[i]]["p"] if pk[i]
+             else D["between_arms_success_only"]["p"])
+        top = max(D[names[0]][k], D[names[1]][k])
+        ax.text(xs[i], top + 0.045, f"p={p:.4f}", ha="center", fontsize=7.8,
+                color=RED if i == 3 else INK2,
+                fontweight="bold" if i == 3 else "normal")
+    ax.set_xticks(xs, [lbl for _, lbl in keys], fontsize=7.8)
+    ax.set_ylim(0, 1.02)
+    ax.set_ylabel("mean distance to demo manifold")
+    ax.set_title("Separated at every stage — including\nwhen the stock policy succeeds",
+                 fontsize=9.8, loc="left")
+
+    # ---- right: the within-arm null, reported as a null -------------------
+    ax = _style(axes[2])
+    xs = np.arange(2)
+    for j, (nm, c) in enumerate(zip(names, cols)):
+        w_ = Z[f"arm{j}_drift_post_lift"]
+        op = Z[f"arm{j}_opened"].astype(bool)
+        vals = [np.nanmean(w_[~op]), np.nanmean(w_[op])]
+        ax.bar(xs + (j - 0.5) * 0.36, vals, 0.36, color=c, zorder=3)
+        k = D["within_arm"][nm]
+        ax.text(xs[0] + (j - 0.5) * 0.36, vals[0] + 0.03,
+                f"n={k['n_never_opened']}", ha="center", fontsize=7.4, color=INK2)
+        ax.text(xs[1] + (j - 0.5) * 0.36, vals[1] + 0.03,
+                f"n={k['n_opened']}", ha="center", fontsize=7.4, color=INK2)
+    ax.set_xticks(xs, ["gripper NEVER\nopened", "gripper\nopened"], fontsize=8)
+    ax.set_ylim(0, 1.02)
+    ax.set_ylabel("mean distance to demo manifold")
+    pq = D["within_arm"][names[1]]["p"]
+    ax.text(0.5, 0.95, f"within stock arm: p={pq:.3f}\n(and in the WRONG direction)",
+            ha="center", fontsize=8, color=INK2)
+    ax.set_title("…but drift does not decide\nwhich episode fails", fontsize=9.8,
+                 loc="left")
+
+    fig.suptitle("Pretraining keeps the policy nearer the demonstrated states — "
+                 "a disposition, not the trigger of a given failure",
+                 fontsize=11, x=0.006, ha="left")
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
+    fig.savefig(FIG / "fig8_manifold_drift.png", bbox_inches="tight")
+    plt.close(fig)
+
+
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     FIG.mkdir(parents=True, exist_ok=True)
-    for f in (fig1, fig2, fig3, fig4, fig5, fig6, fig7):
+    for f in (fig1, fig2, fig3, fig4, fig5, fig6, fig7, fig8):
         f()
         print(f"  {f.__name__} ok")
     for p in sorted(FIG.glob("*.png")):

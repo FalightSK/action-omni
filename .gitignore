@@ -59,3 +59,8 @@ docs/experiments/**/_smoke_frame.png
 # Upstream LIBERO checkout — installed as a dependency, not vendored source.
 # Staged as a bare gitlink otherwise, which breaks fresh clones.
 third_party/
+
+# Separate VLA evaluation literature review; outside the current paper.
+/report/vla_offline_evaluation_review_2026-10-03.md
+/report/vla_evaluation_evidence_matrix_2026-10-03.md
+/report/vla_evaluation_search_log_2026-10-03.json
