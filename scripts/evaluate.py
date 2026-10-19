@@ -31,6 +31,7 @@ import json
 import os
 import sys
 import warnings
+from dataclasses import asdict
 from pathlib import Path
 
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
@@ -74,7 +75,7 @@ def _run_pusht(cfg, vlm_model, train_model, device, n_ep, save_video, output_pat
 
 
 def _run_aloha(cfg, vlm_model, train_model, device, n_ep, save_video, output_path,
-               seed_offset: int = 0, trace_path=None):
+               seed_offset: int = 0, trace_path=None, training_seed=None):
     from envs.aloha_env import AlohaAgent, run_episode
     import gymnasium as gym
     import gym_aloha  # noqa
@@ -95,8 +96,12 @@ def _run_aloha(cfg, vlm_model, train_model, device, n_ep, save_video, output_pat
     print(f"\n[4/4] Running {n_ep} episodes ...\n")
     results, traces = [], []
     for ep in range(n_ep):
+        from experiment_protocol import sampling_seed
+        policy_seed = (sampling_seed("aloha", training_seed, 0, ep + seed_offset)
+                       if training_seed is not None else None)
         r = run_episode(env, agent, cfg, ep, n_ep, save_video, video_dir,
-                        seed_offset=seed_offset, trace=trace_path is not None)
+                        seed_offset=seed_offset, trace=trace_path is not None,
+                        policy_seed=policy_seed)
         if trace_path is not None:
             traces.append(r.pop("_trace"))
         results.append(r)
@@ -111,6 +116,7 @@ def _run_aloha(cfg, vlm_model, train_model, device, n_ep, save_video, output_pat
             for k, v in t.items():
                 flat[f"ep{i:04d}_{k}"] = v
         flat["n_episodes"] = _np.asarray([len(traces)])
+        flat["initial_state_ids"] = _np.asarray([r["initial_state_id"] for r in results])
         Path(trace_path).parent.mkdir(parents=True, exist_ok=True)
         _np.savez_compressed(trace_path, **flat)
         print(f"   trace -> {trace_path}")
@@ -146,7 +152,7 @@ def _run_language_table(cfg, vlm_model, train_model, device, n_ep, save_video,
     return results
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run simulation evaluation")
     parser.add_argument("--dataset",          type=str, default="pusht",
                         help="Dataset name: pusht, aloha, language_table, ood")
@@ -162,11 +168,8 @@ def main() -> None:
                              "the failure taxonomy; the summary JSON keeps only "
                              "aggregates and cannot say HOW an episode failed.")
     parser.add_argument("--seed-offset",      type=int, default=0,
-                        help="ALOHA only: shift episode seeds so a repeat run "
-                             "samples DISJOINT cube poses. Needed for a genuine "
-                             "replication -- without it the same 200 initial "
-                             "scenes are re-used and only the policy's own flow "
-                             "noise is resampled.")
+                        help="ALOHA only: choose a different scene batch. This changes "
+                             "evaluation starts, not the number of independently trained policies.")
     parser.add_argument("--no-video",         action="store_true",
                         help="Skip video recording (faster)")
     parser.add_argument("--max-steps",        type=int, default=None,
@@ -178,9 +181,31 @@ def main() -> None:
     parser.add_argument("--lt-reward",        type=str, default="block2block",
                         help="Language Table command type / reward factory: "
                              "block2block|block2absolute (in-dist), separate|point (OOD)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     cfg = get_config(args.dataset, args.exp)
+    from experiment_protocol import checkpoint_config, file_digest, write_json
+    ckpt_path = Path(args.checkpoint or (Path(cfg.output_dir) / "checkpoints" / "best.pt"))
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    cfg = checkpoint_config(cfg, ckpt, args.dataset, verify_live_encoder=True)
+    protocol = ckpt.get("protocol")
+    training_seed = ckpt.get("training_seed")
+    if protocol:
+        if args.dataset != "aloha":
+            raise ValueError("Use eval_libero.py for camera-ready LIBERO evaluation")
+        if args.max_steps is not None or args.inference_horizon is not None:
+            raise ValueError("Protocol evaluation does not permit horizon overrides")
+        if args.episodes is not None and args.episodes < 1:
+            raise ValueError("Episode count must be positive")
+        out = Path(args.output) if args.output else ckpt_path.parent.parent / "sim_results.json"
+        if out.exists():
+            raise FileExistsError(f"Refusing to overwrite evaluation: {out}")
+        if args.trace is not None and Path(args.trace).exists():
+            raise FileExistsError(f"Refusing to overwrite trace: {args.trace}")
+        args.output = str(out)
+        cfg.output_dir = str(ckpt_path.parent.parent)
     print(f"Dataset    : {args.dataset}  |  Exp: {args.exp}")
     print(f"Output dir : {cfg.output_dir}")
     device = cfg.get_device()
@@ -194,7 +219,7 @@ def main() -> None:
 
     n_ep = args.episodes or cfg.sim_episodes
     if n_ep < 50:
-        print(f"[WARN] n_ep={n_ep} < 50. SR conclusions require n≥50 (MPS non-determinism).")
+        print(f"[WARN] n_ep={n_ep} < 50. SR conclusions require n>=50 (MPS non-determinism).")
     print(f"Device     : {device}\n")
 
     # ── Load VLM ──────────────────────────────────────────────────────────
@@ -211,7 +236,6 @@ def main() -> None:
 
     print(f"\n[2/4] Loading adapter+decoder from {ckpt_path} …")
     train_model = VLATrainModel(cfg).to(device)
-    ckpt        = torch.load(ckpt_path, map_location=device, weights_only=False)
     train_model.load_state_dict(ckpt["state_dict"])
     train_model.eval()
     print(f"   Epoch {ckpt.get('epoch','?')}  |  "
@@ -227,7 +251,7 @@ def main() -> None:
                              n_ep, not args.no_video,
                              Path(args.output) if args.output else None,
                              seed_offset=args.seed_offset,
-                             trace_path=args.trace)
+                             trace_path=args.trace, training_seed=training_seed)
     elif args.dataset == "language_table":
         results = _run_language_table(cfg, vlm_model, train_model, device,
                                       n_ep, not args.no_video,
@@ -250,9 +274,8 @@ def main() -> None:
     print(f"  Mean steps        : {np.mean(steps):.1f}")
     print(f"  Horizon train/exec: {cfg.action_horizon}/{cfg.inference_horizon}")
     if n_ep >= 50:
-        from scipy.stats import binom
-        ci_lo = binom.ppf(0.025, n_ep, sr) / n_ep
-        ci_hi = binom.ppf(0.975, n_ep, sr) / n_ep
+        from scripts.analysis.paired_results import wilson
+        ci_lo, ci_hi = wilson(sum(succs), n_ep)
         print(f"  Wilson 95% CI     : [{ci_lo*100:.0f}%, {ci_hi*100:.0f}%]")
     print(f"{'═'*52}\n")
 
@@ -270,10 +293,19 @@ def main() -> None:
         "num_flow_steps": cfg.num_flow_steps,
         "success_threshold": cfg.success_threshold,
         "episodes": results,
+        "training_seed": training_seed,
+        "protocol_id": protocol["protocol_id"] if protocol else None,
+        "run_signature": ckpt.get("run_signature"),
+        "cache_id": ckpt.get("cache_id"),
+        "checkpoint_sha256": file_digest(ckpt_path),
+        "checkpoint_epoch": ckpt.get("epoch"),
+        "seed_offset": args.seed_offset,
+        "trace": args.trace,
+        "torch_version": torch.__version__,
+        "configuration": asdict(cfg),
     }
     out = Path(args.output) if args.output else Path(cfg.output_dir) / "sim_results.json"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(summary, indent=2))
+    write_json(out, summary)
     print(f"  Results saved → {out}")
 
 

@@ -157,7 +157,7 @@ def annotate_frame(frame, ep, total_eps, step, max_steps, reward, max_reward, su
 
 
 def run_episode(env, agent, cfg, ep_idx, total_eps, save_video, video_dir,
-                seed_offset: int = 0, trace: bool = False):
+                seed_offset: int = 0, trace: bool = False, policy_seed=None):
     """Run one gym_aloha episode. Returns a result dict.
 
     max_coverage is reported as max_reward/4 so the generic evaluate.py summary
@@ -165,10 +165,14 @@ def run_episode(env, agent, cfg, ep_idx, total_eps, save_video, video_dir,
 
     seed_offset shifts the episode seed so a second run samples a DISJOINT set of
     cube poses. AlohaEnv.reset derives the pose from this seed alone, so without
-    an offset a repeat run re-uses the same 200 initial scenes and is not an
-    independent replication — it would only resample the policy's own flow noise.
+    an offset a repeat run re-uses the same initial scenes. Either way this is
+    evaluation of an existing policy, not an independent training replication.
     """
-    obs, _ = env.reset(seed=(ep_idx + seed_offset) * 137 + 42)
+    environment_seed = (ep_idx + seed_offset) * 137 + 42
+    obs, _ = env.reset(seed=environment_seed)
+    if policy_seed is not None:
+        from experiment_protocol import seed_everything
+        seed_everything(policy_seed)
     agent.reset()
     frames, max_reward, success, reward = [], 0, False, 0
     t0 = time.time()
@@ -179,7 +183,7 @@ def run_episode(env, agent, cfg, ep_idx, total_eps, save_video, video_dir,
     # receiving gripper closed early, whether the arms never met, or whether
     # contact was made and lost. Those are different failures and the taxonomy
     # needs the timeline to tell them apart.
-    tr_state, tr_action, tr_reward = [], [], []
+    tr_state, tr_action, tr_reward, tr_next_state = [], [], [], []
 
     for step in range(cfg.sim_max_steps):
         rgb    = np.asarray(obs["pixels"]["top"])
@@ -197,6 +201,7 @@ def run_episode(env, agent, cfg, ep_idx, total_eps, save_video, video_dir,
         success    = bool(info.get("is_success", reward >= 4))
         if trace:
             tr_reward.append(reward)
+            tr_next_state.append(np.asarray(obs["agent_pos"], dtype=np.float32).copy())
 
         if save_video:
             frames.append(annotate_frame(env.render(), ep_idx, total_eps,
@@ -219,6 +224,11 @@ def run_episode(env, agent, cfg, ep_idx, total_eps, save_video, video_dir,
           f"steps={step+1} | replans={agent.replan_count} | {elapsed:.0f}s")
     out = {
         "episode": ep_idx + 1,
+        "initial_state_id": ep_idx + seed_offset,
+        "environment_seed": environment_seed,
+        "policy_sampling_seed": policy_seed,
+        "termination_reason": ("success" if success else "terminated" if terminated
+                               else "truncated" if truncated else "horizon"),
         "steps": step + 1,
         "max_reward": max_reward,
         "final_reward": reward,
@@ -230,6 +240,7 @@ def run_episode(env, agent, cfg, ep_idx, total_eps, save_video, video_dir,
     if trace:
         out["_trace"] = {
             "state":  np.asarray(tr_state,  dtype=np.float32),   # (T, 14)
+            "next_state": np.asarray(tr_next_state, dtype=np.float32),  # aligned with post-step reward
             "action": np.asarray(tr_action, dtype=np.float32),   # (T, 14)
             "reward": np.asarray(tr_reward, dtype=np.int8),      # (T,)
             "attn_image_mass": np.asarray(getattr(agent, "attn_trace", []),

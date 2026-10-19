@@ -26,6 +26,7 @@ import json
 import os
 import sys
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 if sys.platform == "win32" and os.environ.get("MUJOCO_GL", "").lower() != "wgl":
@@ -56,6 +57,8 @@ def load_policy(cfg, ckpt_path: Path, device: str):
           f"| missing={len(hard)} unexpected={len(unexpected)}")
     if hard[:3]:
         print(f"      e.g. missing: {hard[:3]}")
+    if hard or unexpected:
+        raise ValueError("Checkpoint has unexplained missing/unexpected head tensors")
     return vlm, head
 
 
@@ -77,6 +80,8 @@ def main() -> int:
                     help="record this many episodes per (task, condition)")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--output-dir", type=Path,
+                    help="Seed-specific run directory (or supply an absolute --checkpoint)")
     a = ap.parse_args()
 
     # Resolve through the registry, not a hard-coded import: --exp was being
@@ -85,11 +90,24 @@ def main() -> int:
     # numbers as PaliGemma's.
     from configs.registry import get_config
     cfg = get_config("libero", a.exp)
+    if a.output_dir:
+        cfg.output_dir = str(a.output_dir)
     out_dir = ROOT / cfg.output_dir
     ckpt = out_dir / "checkpoints" / a.checkpoint
     if not ckpt.exists():
         print(f"no checkpoint at {ckpt}")
         return 1
+    from experiment_protocol import (checkpoint_config, file_digest, sampling_seed,
+                                     seed_everything, write_json)
+    checkpoint = torch.load(ckpt, map_location="cpu", weights_only=False)
+    cfg = checkpoint_config(cfg, checkpoint, "libero", verify_live_encoder=True)
+    protocol = checkpoint.get("protocol")
+    training_seed = checkpoint.get("training_seed")
+    dst = Path(a.output) if a.output else ckpt.parent.parent / "eval_libero.json"
+    if a.episodes < 1:
+        raise ValueError("Episode count must be positive")
+    if protocol and dst.exists():
+        raise FileExistsError(f"Refusing to overwrite evaluation: {dst}")
 
     from envs.libero_env import (LiberoAgent, build_conditions, load_init_states,
                                  make_env, run_episode)
@@ -129,6 +147,8 @@ def main() -> int:
         # uses state i, so every condition is compared on identical starts —
         # otherwise a swapped-instruction difference could be scene variation.
         inits = load_init_states(task)
+        if a.episodes > len(inits):
+            raise ValueError("Requested more unique starts than available; refusing duplicate initial states")
         env = make_env(bddl, cfg)
         try:
             for cond in a.conditions:
@@ -136,13 +156,19 @@ def main() -> int:
                 wins = 0
                 for ep in range(a.episodes):
                     record = ep < a.videos
+                    policy_seed = None
+                    if protocol:
+                        policy_seed = sampling_seed("libero", training_seed, ti, ep)
+                        seed_everything(policy_seed)
                     r = run_episode(env, agent, cfg, instr,
                                     seed=a.seed + ep, record=record,
                                     init_state=inits[ep % len(inits)])
                     wins += int(r["success"])
                     frames = r.pop("frames")
                     r.update(task=ti, task_language=task.language, condition=cond,
-                             instruction=instr, episode=ep)
+                             instruction=instr, episode=ep, initial_state_id=ep,
+                             environment_seed=a.seed + ep, policy_sampling_seed=policy_seed,
+                             termination_reason="success" if r["success"] else "horizon")
                     results.append(r)
                     if record and frames:
                         try:
@@ -179,11 +205,16 @@ def main() -> int:
         delta = "--" if cond == a.conditions[0] else f"{sr - base:+.1%}"
         print(f"{cond:<12}{sr:>8.1%}{delta:>14}{moved:>8.0%}{grip:>14.1f}")
 
-    dst = Path(a.output) if a.output else out_dir / "eval_libero.json"
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_text(json.dumps(
-        {"checkpoint": str(ckpt), "episodes": a.episodes,
-         "conditions": a.conditions, "results": results}, indent=2), encoding="utf-8")
+    write_json(dst, {"dataset": "libero", "exp_id": a.exp,
+                    "checkpoint": str(ckpt), "episodes": a.episodes,
+                    "conditions": a.conditions, "results": results,
+                    "training_seed": training_seed,
+                    "protocol_id": protocol["protocol_id"] if protocol else None,
+                    "run_signature": checkpoint.get("run_signature"),
+                    "cache_id": checkpoint.get("cache_id"),
+                    "checkpoint_sha256": file_digest(ckpt),
+                    "checkpoint_epoch": checkpoint.get("epoch"),
+                    "torch_version": torch.__version__, "configuration": asdict(cfg)})
     print(f"\nwrote {dst}")
 
     if base is not None and base < 0.05:

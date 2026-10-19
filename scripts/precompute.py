@@ -31,6 +31,7 @@ Supported datasets / experiments:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -159,7 +160,7 @@ def _recompute_actions_only(cfg, out_path: Path) -> None:
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Pre-compute VLM embeddings")
     parser.add_argument("--dataset",          type=str, default="pusht",
                         help="Dataset name: pusht, aloha, language_table, libero, ood")
@@ -171,13 +172,28 @@ def main() -> None:
                         help="Override output cache path")
     parser.add_argument("--recompute-actions", action="store_true",
                         help="Rebuild action chunks without re-running VLM")
-    args = parser.parse_args()
+    parser.add_argument("--split-manifest", type=Path,
+                        help="Opt in to the prepared episode-holdout protocol (full HDF5 only)")
+    args = parser.parse_args(argv)
 
     cfg = get_config(args.dataset, args.exp)
     print(f"Dataset    : {args.dataset}  |  Exp: {args.exp}")
     print(f"Output dir : {cfg.output_dir}")
     device   = cfg.get_device()
     out_path = Path(args.output or cfg.embeddings_cache)
+    protocol = None
+    if args.split_manifest:
+        from experiment_protocol import (apply_normalization, load_protocol,
+                                         file_digest)
+        protocol = load_protocol(args.split_manifest, args.dataset)
+        if args.max_samples is not None or args.recompute_actions or not is_hdf5_path(out_path):
+            raise ValueError("Protocol encoding requires full HDF5; no action-only rewrites/subsets")
+        if out_path.exists():
+            raise FileExistsError(f"Refusing to overwrite protocol cache: {out_path}")
+        for relative, expected in protocol["source_files"].items():
+            if file_digest(Path(cfg.dataset_root) / relative) != expected:
+                raise ValueError(f"Source data changed: {relative}")
+        apply_normalization(cfg, protocol)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     if args.recompute_actions:
@@ -192,6 +208,12 @@ def main() -> None:
     # ── Build dataset ──────────────────────────────────────────────────────
     print("\n[1/3] Loading dataset …")
     full_dataset = _get_raw_dataset(args.dataset, cfg)
+    if protocol:
+        from experiment_protocol import protocol_arrays
+        episode_ids, validation_mask = protocol_arrays(protocol)
+        if (len(full_dataset) != protocol["n_samples"]
+                or not np.array_equal(full_dataset.episode_ids, episode_ids)):
+            raise ValueError("Raw dataset order differs from the prepared protocol")
 
     if args.max_samples and args.max_samples < len(full_dataset):
         dataset = Subset(full_dataset, list(range(args.max_samples)))
@@ -239,12 +261,24 @@ def main() -> None:
     # ── Allocate sink (preallocated tensors for .pt, streaming writer for HDF5) ──
     writer = None
     if use_hdf5:
+        attrs = {"format": fmt, "dataset": args.dataset, "exp_id": args.exp,
+                 "vlm_extract_layers": list(cfg.vlm_extract_layers),
+                 "encoding_batch_size": cfg.embed_batch_size,
+                 "state_dim": cfg.state_dim, "full_dataset": bool(is_full)}
+        if protocol:
+            from experiment_protocol import cache_config, digest, encoder_code_id, source_assets
+            attrs.update(protocol_id=protocol["protocol_id"],
+                         cache_config=json.dumps(cache_config(cfg), sort_keys=True),
+                         encoder_code_id=encoder_code_id(),
+                         source_assets=json.dumps(source_assets(cfg), sort_keys=True))
+            attrs["cache_id"] = digest(attrs)
         writer = HDF5EmbeddingWriter(
             out_path, N=N, S=S, H=H_size, state_dim=state_d,
             horizon=horizon, action_dim=action_d, n_layers=n_layers,
-            attrs={"format": fmt, "dataset": args.dataset, "exp_id": args.exp,
-                   "vlm_extract_layers": list(cfg.vlm_extract_layers),
-                   "state_dim": cfg.state_dim, "full_dataset": bool(is_full)})
+            attrs=attrs)
+        if protocol:
+            writer.f.create_dataset("episode_ids", data=episode_ids)
+            writer.f.create_dataset("validation_mask", data=validation_mask.astype(np.uint8))
     else:
         if n_layers > 1:
             all_embeds = torch.zeros(N, n_layers, S, H_size, dtype=torch.bfloat16)
@@ -255,6 +289,7 @@ def main() -> None:
         all_actions = torch.zeros(N, horizon, action_d, dtype=torch.float32)
 
     ptr = 0
+    batch_one_parity = {"rows": [], "max_absolute_difference": 0.0, "masks_equal": True}
     t0  = time.time()
     with torch.no_grad():
         for batch in tqdm(loader, desc="VLM encoding", unit="batch"):
@@ -262,6 +297,20 @@ def main() -> None:
             vlm_inputs = model.build_vlm_inputs(
                 images=batch["images"], task_texts=batch["task_texts"], device=device)
             tokens, img_mask = model.encode_vlm(vlm_inputs)
+
+            if protocol and (ptr == 0 or ptr + B == N):
+                # Compare actual batched features with the live batch-one path.
+                # Do this before allowing the cache to be marked complete.
+                for j in sorted({0, B - 1}):
+                    single_inputs = model.build_vlm_inputs(
+                        [batch["images"][j]], [batch["task_texts"][j]], device)
+                    single, single_mask = model.encode_vlm(single_inputs)
+                    delta = (tokens[j].to(torch.bfloat16).float()
+                             - single[0].to(torch.bfloat16).float()).abs().max().item()
+                    if delta != 0 or not torch.equal(img_mask[j], single_mask[0]):
+                        raise ValueError(f"Cache/live batch-one feature mismatch at row {ptr+j}: {delta}")
+                    batch_one_parity["rows"].append(ptr + j)
+                print(f"   Cache/live batch-one parity passed at rows {batch_one_parity['rows']}")
 
             if tokens.ndim == 4:
                 actual_S = tokens.shape[2]
@@ -296,6 +345,8 @@ def main() -> None:
 
     # ── Save ───────────────────────────────────────────────────────────────
     if use_hdf5:
+        if protocol:
+            writer.f.attrs["batch_one_parity"] = json.dumps(batch_one_parity)
         writer.close()
         mb = out_path.stat().st_size / 1e6
         print(f"   Saved → {out_path}  ({mb:.0f} MB, HDF5 streamed)")

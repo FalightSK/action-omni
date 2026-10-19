@@ -1,0 +1,6 @@
+{
+  "status": "interrupted_for_investigation",
+  "reason": "Cross-batch feature parity failed; minimum cosine ~0.99407, maximum relative RMS ~0.10878 for batch 4 vs 32.",
+  "eligible_for_paper": false,
+  "artifacts_preserved": true
+}

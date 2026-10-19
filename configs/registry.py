@@ -62,6 +62,8 @@ _REGISTRY: dict[tuple[str, str], str] = {
     ("aloha", "exp05_groot_transfer"): "configs.aloha.exp05_groot_transfer.AlohaExp05GrootTransfer",
     ("aloha", "exp06"):       "configs.aloha.exp06_qwen3vl_transfer.AlohaExp06Qwen3VLTransfer",
     ("aloha", "exp06_qwen3vl_transfer"): "configs.aloha.exp06_qwen3vl_transfer.AlohaExp06Qwen3VLTransfer",
+    ("aloha", "exp07"): "configs.aloha.exp07_cosmos_transfer.AlohaExp07CosmosTransfer",
+    ("aloha", "exp07_cosmos_transfer"): "configs.aloha.exp07_cosmos_transfer.AlohaExp07CosmosTransfer",
     ("libero", "exp05"):      "configs.libero.exp05_groot_2view.LiberoExp05Groot2View",
     ("libero", "exp05_groot_2view"): "configs.libero.exp05_groot_2view.LiberoExp05Groot2View",
     ("libero", "exp06"):      "configs.libero.exp06_qwen3vl_2view.LiberoExp06Qwen3VL2View",

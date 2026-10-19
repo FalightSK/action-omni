@@ -1,30 +1,82 @@
-# scripts/ layout
+# Commands
 
-Core entrypoints live at `scripts/` root; one-off helpers are grouped by purpose.
-Every subfolder script finds the repo root via `Path(__file__).parents[2]`
-(root-level scripts use `parents[1]`).
+Run commands from the repository root. Root-level scripts locate that root with
+`Path(__file__).resolve().parents[1]`; scripts one directory deeper use `parents[2]`.
+Shared runtime code belongs in `models/`, `data/`, `envs/`, and `configs/`.
 
-## Root — core pipeline (referenced by launchers & docs; do not move)
-| file | step |
+## Main pipeline
+
+| Command | Purpose |
 |---|---|
-| `precompute.py` | 1 · cache VLM embeddings (`--dataset --exp`) |
-| `train.py` | 2 · train adapter + flow decoder |
-| `evaluate.py` / `offline_eval.py` | 3 · rollout / offline eval |
-| `convert_language_table.py` | build LT dataset from TFDS |
-| `analysis.py`, `compare.py`, `export_bank.py` | shared analysis utilities |
-| `train_lt_onthefly.py` | on-the-fly (no-cache) training variant |
-| `launch_lt.ps1`, `run_lt_pipeline.ps1`, `migrate_assets.sh` | launchers |
+| `run_experiment.py` | Reuse/build a validated shared cache, then resume/train one seed. |
+| `prepare_protocol.py` | Prepare episode splits and training-only statistics without a VLM. |
+| `precompute.py` | Cache frozen features (`--dataset --exp`). |
+| `train.py` | Train the adapter/action head on cached features. |
+| `evaluate.py`, `eval_libero.py` | Closed-loop policy evaluation. |
+| `offline_eval.py` | Historical open-loop evaluation. |
+| `validate_harness.py`, `validate_harness_aloha.py` | Simulator harness checks. |
+| `train_lt_onthefly.py`, `convert_language_table.py` | Language Table training/data variants. |
+| `analysis.py`, `compare.py`, `export_bank.py` | Legacy PushT analysis and probe-bank export. |
 
-## Subfolders
-- **`data/`** — dataset build + embedding-cache tooling (`_lt_make_curated_subset`, `_pt_to_h5_cache`, `_h5_*`, downloaders).
-- **`validation/`** — milestone validity gates (`_val_gate1_aloha`, `_val_gate1_lt`).
-- **`eval/`** — policy rollout / success-rate eval (`eval_lt_*`, `eval_ood_*`, `eval_token_ablation`, `_lt_eval_indist`).
-- **`analysis/`** — head diagnostics (`head_diagnostics.py --dataset {libero,aloha}`), attention / PCA / token probes, figure generators.
-- **`report/`** — `build_report.py` → self-contained `report/vla_anatomy_report.{html,pdf}`.
-- **`plots/`** — figure generators + PDF report builders.
-- **`media/`** — rollout videos / filmstrips.
-- **`archive/`** — superseded: smolvla-era diagnostics, 0%-SR failure analysis, VRAM benches. Kept for reference, not part of the active pipeline.
+The [camera-ready workflow](../docs/CAMERA_READY.md) identifies the current opt-in
+protocol and deferred experiment commands. Historical entrypoints do not
+constitute revised experiment results.
 
-Backward-compat shims (`train.py`, `precompute_embeddings.py`, `inference.py`,
-`config_loader.py`) remain at the **repo root** — they are imported by
-`data/`, `models/`, `envs/` and must not be relocated.
+## One full experiment
+
+```powershell
+$py = 'C:\Users\SK\miniconda3\envs\vla\python.exe'
+& $py scripts/run_experiment.py --dataset aloha --exp exp05 --seed 0 --split-manifest asset/protocols/aloha/97fa699cb307366377cec2eb0f29795d967710f9ffe0fea9d1e1c50108b8d537.json --run-root asset/runs/hf_warmup_patience
+```
+
+Repeat this command to resume. A completed compatible run is skipped. Change
+`--seed` for an independent policy using the same validated feature cache.
+
+```text
+asset/protocols/<dataset>/<protocol_id>.json         episode splits/statistics
+asset/cache/<dataset>/<backbone>/<identity>/         shared frozen features
+asset/runs/hf_warmup_patience/<dataset>/<experiment>/
+  seed_000/checkpoints/                             best, last, final
+  seed_000/history.jsonl                            per-epoch training record
+  seed_000/run_manifest.json                        configuration/result
+  seed_000/pipeline.json                            latest orchestration status
+  seed_000/attempts/<UTC timestamp>/                logs, checks, source snapshot
+```
+
+Cache identities include the protocol, encoder settings/code, and source
+weights/processor hashes, but no training seed. Encoding writes a `.partial.h5`
+file; only a complete cache passing provenance, shape, finite-value, raw ALOHA
+boundary and batch-one parity checks is published. Interrupted partial files are
+preserved under timestamped names. A bad published cache causes an explicit
+error. OS file locks prevent duplicate writers or duplicate runs of one seed.
+Training uses Hugging Face linear warmup/cosine decay toward a 1% LR floor.
+ALOHA reaches this floor by epoch 100 (`lr_decay_epochs=100`) and holds it;
+the independent maximum remains 300 epochs. The endpoint is shared by both
+backbones. Other benchmarks default to decay across their full epoch budget.
+Validation patience (30 epochs by default) is enabled as soon as the configured
+warmup optimizer updates finish. For ALOHA, warmup is 300 updates and the first
+eligible validation is epoch 5. Training stops when patience expires or reaches
+its 300-epoch maximum; it can stop during cosine decay. State is resumable across
+warmup, decay and the constant-floor phase. The previous OneCycle pilot stays under
+`asset/runs/episode_holdout/`; its changed training identity requires a separate
+run root for the new recipe. Shared caches are reused.
+`--run-root` optionally selects a campaign directory. No rollout is launched.
+
+## Supporting scripts
+
+- `data/`: downloaders, conversion, cache migration, dataset inspection.
+- `validation/`: milestone gates.
+- `validation/observe_training.py`: bounded real-data CUDA/DataLoader/optimizer
+  and interrupted-resume check; writes only to a new readiness directory.
+- `eval/`: instruction, OOD, and token-ablation evaluations.
+- `analysis/`: head diagnostics, attention/PCA probes, paired statistics, figures.
+- `report/`, `plots/`, `media/`: report, figure, and video generators.
+- `archive/`: superseded experiments retained for reference.
+- Root `.ps1`/`.sh` files: existing launch/status/migration commands; paths retained
+  because external scheduled tasks may reference them.
+
+The frozen-backbone implementation is now `models/backbones.py`. The latent-study
+`backbones.py` only re-exports it for older study commands. `analysis/__init__.py`
+keeps package imports safe alongside the historical `scripts/analysis.py` CLI.
+Root compatibility commands forward to this pipeline; they contain no optimizer,
+cache-generation, or rollout implementation of their own.

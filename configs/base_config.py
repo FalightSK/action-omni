@@ -50,6 +50,8 @@ class BaseVLAConfig:
 
     # ── VLM config (frozen — same for all datasets) ───────────────────────────
     freeze_vlm:      bool = True
+    canonicalize_padding: bool = False  # opt-in episode protocol: remove processor pads, zero-pad right
+    vlm_bf16_reduced_precision_reduction: bool = True  # legacy; protocol disables batch-sensitive reductions
     vlm_hidden_size: int  = 1024     # Qwen3.5-0.8B hidden dim
     image_token_id:  int  = 248056   # Qwen image token id
 
@@ -110,14 +112,16 @@ class BaseVLAConfig:
 
     # ── Training ──────────────────────────────────────────────────────────────
     batch_size:          int   = 256
-    num_epochs:          int   = 300
+    num_epochs:          int   = 300  # hard maximum training epochs
+    lr_decay_epochs: int | None = None  # cosine endpoint; None follows num_epochs
     learning_rate:       float = 3e-4
+    min_lr_ratio:        float = 0.01  # cosine floor relative to each group's peak
     weight_decay:        float = 1e-2
     grad_clip:           float = 1.0
     warmup_steps:        int   = 300
     log_every:           int   = 100
     save_every:          int   = 25
-    early_stop_patience: int   = 50
+    early_stop_patience: int   = 30  # validation epochs without improvement after warmup
 
     # ── Device ────────────────────────────────────────────────────────────────
     device:           str = "auto"

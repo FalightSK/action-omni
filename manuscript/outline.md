@@ -2,7 +2,7 @@
 
 Updated: 18 October 2026 (Asia/Tokyo).
 
-**Current detailed plan: [plan.md](plan.md).** This active outline replaces the pre-review writing guidelines retained below. The revised plan allows independent training replications, episode-disjoint validation, corrected analysis, and a time-gated Cosmos extension. Do not follow the historical "no new experiments" instruction or preserve its predetermined numerical conclusions.
+**Current detailed plan: [plan.md](../plan.md).** This active outline replaces the pre-review writing guidelines retained below. The revised plan allows independent training replications, episode-disjoint validation, corrected analysis, and a time-gated Cosmos extension. Do not follow the historical "no new experiments" instruction or preserve its predetermined numerical conclusions.
 
 ## Working title
 
@@ -59,10 +59,11 @@ Use a primary table with seed-specific rates and mean +/- sample SD. Prefer thre
 
 ## Delivery checkpoints
 
-- Editable manuscript: the author will supply the original source.
+- Editable manuscript: `manuscript/main.tex` has been reconciled against the submitted PDF, retaining its seven-section argument, six result tables, and original 13 cited works while correcting scope and evidence labels. It compiles with the six-page guard. Reconciliation with original editable source if supplied, restoration/replacement of figures, visual review, author details, and new results remain pending.
+- Execution status: code and protocol validation are prepared; retraining and full evaluation await the author's confirmation. See `docs/camera_ready_validation.md`.
 - Experiment cutoff: **20 October 2026, 20:59 JST**.
 - Conference deadline: **21 October 2026, 20:59 JST**, equivalent to 20 October at 23:59 Anywhere on Earth.
-- Final numerical, reference, and rendered-PDF checks follow the checklist in [plan.md](plan.md).
+- Final numerical, reference, and rendered-PDF checks follow the checklist in [plan.md](../plan.md).
 
 ---
 

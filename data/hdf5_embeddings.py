@@ -52,7 +52,8 @@ class HDF5EmbeddingDataset(Dataset):
     this is safe with DataLoader num_workers>0 (each worker reopens its own handle).
     """
 
-    def __init__(self, cache_path: str, expect_layers: tuple | None = None) -> None:
+    def __init__(self, cache_path: str, expect_layers: tuple | None = None,
+                 protocol=None, config=None) -> None:
         import h5py  # local import so non-HDF5 paths don't require h5py
 
         self.cache_path = str(cache_path)
@@ -61,6 +62,32 @@ class HDF5EmbeddingDataset(Dataset):
 
         # Read small tensors + metadata eagerly; keep embeddings/masks on disk.
         with h5py.File(self.cache_path, "r") as f:
+            if not bool(f.attrs.get("complete", True)):
+                raise ValueError("Cache encoding did not complete")
+            self.protocol_id = f.attrs.get("protocol_id")
+            self.cache_id = f.attrs.get("cache_id")
+            import json
+            self.encoder_provenance = {
+                "encoder_code_id": f.attrs.get("encoder_code_id"),
+                "source_assets": json.loads(f.attrs.get("source_assets", "null"))}
+            self.episode_ids = f["episode_ids"][:] if "episode_ids" in f else None
+            self.validation_mask = f["validation_mask"][:].astype(bool) if "validation_mask" in f else None
+            if protocol is not None:
+                from experiment_protocol import cache_config, encoder_code_id, protocol_arrays
+                ids, val = protocol_arrays(protocol)
+                if self.protocol_id != protocol["protocol_id"]:
+                    raise ValueError("Cache protocol does not match the requested episode split")
+                if not self.cache_id:
+                    raise ValueError("Cache lacks a provenance identifier")
+                if (not np.array_equal(ids, self.episode_ids)
+                        or not np.array_equal(val, self.validation_mask)):
+                    raise ValueError("Cache episode/validation mapping mismatch")
+                if config is None or json.loads(f.attrs.get("cache_config", "null")) != cache_config(config):
+                    raise ValueError("Cache configuration/normalization mismatch")
+                if f.attrs.get("encoder_code_id") != encoder_code_id():
+                    raise ValueError("Encoder code changed since cache generation")
+                if not bool(f.attrs.get("full_dataset", False)):
+                    raise ValueError("Camera-ready training requires the full dataset cache")
             self.n = int(f.attrs.get("n_samples", f["embeddings"].shape[0]))
             self.states  = torch.from_numpy(f["states"][:]).float()
             self.actions = torch.from_numpy(f["actions"][:]).float()
@@ -166,6 +193,8 @@ class HDF5EmbeddingWriter:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self.f = h5py.File(self.path, "w")
         self.n_layers = n_layers
+        self._written = 0
+        self._expected = N
 
         emb_shape = (N, n_layers, S, H) if n_layers > 1 else (N, S, H)
 
@@ -187,6 +216,7 @@ class HDF5EmbeddingWriter:
 
         self.f.attrs["n_samples"] = N
         self.f.attrs["embed_is_bf16_bits"] = True
+        self.f.attrs["complete"] = False
         if attrs:
             for k, v in attrs.items():
                 self.f.attrs[k] = v
@@ -194,12 +224,19 @@ class HDF5EmbeddingWriter:
     def write(self, ptr, embeds_bf16, img_mask_bool, states_f32, actions_f32):
         """embeds_bf16: torch bf16 (B,S,H) or (B,L,S,H). Others torch tensors."""
         B = embeds_bf16.shape[0]
+        if ptr != self._written or B < 1 or ptr + B > self._expected:
+            raise ValueError("Cache writes must cover contiguous rows exactly once")
         # reinterpret bf16 → uint16 bits (lossless), move to numpy
         u16 = embeds_bf16.contiguous().view(torch.uint16).cpu().numpy()
         self.f["embeddings"][ptr:ptr+B] = u16
         self.f["img_masks"][ptr:ptr+B]  = img_mask_bool.to(torch.uint8).cpu().numpy()
         self.f["states"][ptr:ptr+B]     = states_f32.cpu().numpy()
         self.f["actions"][ptr:ptr+B]    = actions_f32.cpu().numpy()
+        self._written += B
 
     def close(self):
+        if self._written != self._expected:
+            self.f.close()
+            raise ValueError("Cannot mark a partially written cache complete")
+        self.f.attrs["complete"] = True
         self.f.close()

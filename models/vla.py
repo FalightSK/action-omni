@@ -47,12 +47,33 @@ Cache format v3 (precompute_embeddings.py)
 
 from __future__ import annotations
 import math
-import sys
-from pathlib import Path
 
 import torch
 import torch.nn as nn
 from transformers import AutoProcessor, AutoModel
+
+
+def canonicalize_vlm_tokens(tokens, img_mask, attention_mask, target):
+    """Remove left/right processor pads before fixed zero-padding.
+
+    Processor padding is batch-dependent and its hidden states need not be zero.
+    A cache built in a mixed-length batch must match batch-one live inference.
+    Supports single and multi-layer token tensors without changing real tokens.
+    """
+    if attention_mask is None or attention_mask.shape != img_mask.shape:
+        raise ValueError("Canonical token padding requires an aligned attention mask")
+    shape = list(tokens.shape)
+    shape[-2] = target
+    canonical = tokens.new_zeros(shape)
+    images = img_mask.new_zeros((len(tokens), target))
+    for i, mask in enumerate(attention_mask):
+        indices = torch.nonzero(mask, as_tuple=False).flatten()
+        n = len(indices)
+        if n > target:
+            raise ValueError("Real token sequence exceeds configured budget; refusing truncation")
+        canonical[i, ..., :n, :] = tokens[i].index_select(-2, indices)
+        images[i, :n] = img_mask[i].index_select(0, indices)
+    return canonical, images
 
 from .flow_matching import FlowMatchingDecoder
 
@@ -479,21 +500,17 @@ class VLAModel(nn.Module):
 
         # ── Frozen VLM ───────────────────────────────────────────────────
         # Default is the project's own Qwen3.5-0.8B. Other backbones (pi05,
-        # groot, ...) are loaded through the cross-backbone study's loader, which
+        # groot, ...) are loaded through the shared model loader, which
         # already knows how to graft a lerobot policy's VLM subtree into the
         # matching HF architecture and discard its action expert. Reusing that
         # loader keeps one implementation of the grafting rules rather than two
         # that can drift apart.
         backbone = getattr(config, "vlm_backbone", "qwen")
         if backbone != "qwen":
-            import importlib.util
-            _bp = Path(__file__).resolve().parents[1] / "scripts" / "analysis" /                 "latent_compare" / "backbones.py"
-            _spec = importlib.util.spec_from_file_location("_lc_backbones", _bp)
-            _mod = importlib.util.module_from_spec(_spec)
-            sys.modules["_lc_backbones"] = _mod
-            _spec.loader.exec_module(_mod)
-            print(f"  Loading VLM backbone '{backbone}' via latent_compare loader …")
-            bb = _mod.load_backbone(backbone, device="cpu", dtype=torch.bfloat16)
+            from models.backbones import load_backbone
+
+            print(f"  Loading VLM backbone '{backbone}' …")
+            bb = load_backbone(backbone, device="cpu", dtype=torch.bfloat16)
             self.processor = bb.processor
             self.vlm = bb.model
             self._vlm_family = backbone
@@ -624,6 +641,17 @@ class VLAModel(nn.Module):
 
     @torch.no_grad()
     def encode_vlm(self, vlm_inputs: dict) -> tuple[torch.Tensor, torch.Tensor]:
+        # Cache batches and live batch-one reads must use the same accumulation.
+        # ponytail: CUDA flags are process-global; concurrent encoders need separate processes.
+        previous = torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction
+        torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = getattr(
+            self.config, "vlm_bf16_reduced_precision_reduction", True)
+        try:
+            return self._encode_vlm(vlm_inputs)
+        finally:
+            torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = previous
+
+    def _encode_vlm(self, vlm_inputs: dict) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Returns:
           tokens   : (B, seq_len, vlm_hidden_size)           — single layer (n_vlm_layers==1)
@@ -683,6 +711,10 @@ class VLAModel(nn.Module):
             if fin is not None and layers[0] < len(hs) - 1:
                 tokens = fin(tokens.to(next(fin.parameters()).dtype)).float()
         img_mask = (vlm_inputs["input_ids"] == self.config.image_token_id)
+
+        if getattr(self.config, "canonicalize_padding", False):
+            return canonicalize_vlm_tokens(
+                tokens, img_mask, vlm_inputs.get("attention_mask"), self.config.img_seq_len)
 
         # Right-pad with ZEROS to the configured sequence length.
         #

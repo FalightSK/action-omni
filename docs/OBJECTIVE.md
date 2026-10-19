@@ -89,7 +89,7 @@ LIBERO-Goal and ALOHA differ on **six axes simultaneously**:
 
 Two testbeds cannot separate six axes. Any statement naming one axis as *the*
 cause of the LIBERO/ALOHA reversal is an interpretation, not a result, and is
-written as such throughout `RESULTS.md`.
+written as such throughout `docs/RESULTS.md`.
 
 ## Environments
 

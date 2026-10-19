@@ -87,6 +87,7 @@ class AlohaExp01(BaseVLAConfig):
     # ── Training ────────────────────────────────────────────────────────────────
     batch_size:  int = 256
     num_epochs:  int = 300
+    lr_decay_epochs: int = 100  # reach the LR floor sooner; hard maximum stays 300
 
     # ── Simulation eval ───────────────────────────────────────────────────────────
     sim_episodes:  int = 50

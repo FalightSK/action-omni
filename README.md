@@ -1,5 +1,12 @@
 # VLA anatomy — which components decide closed-loop success
 
+> **Camera-ready revision in progress (18 October 2026):** the opt-in episode-holdout implementation and editable LaTeX draft are described in [camera-ready workflow](docs/CAMERA_READY.md), [plan.md](plan.md), and [manuscript/README.md](manuscript/README.md). Validation evidence and remaining gates are in [validation record](docs/camera_ready_validation.md). One full ALOHA GR00T seed is authorized; use the [single experiment command](scripts/README.md#one-full-experiment). The remaining training matrix and performance rollouts are deferred. Numerical results below describe the historical study, not completed episode-holdout replications.
+
+For repository navigation, setup, tests, and the document migration map, see the
+[project guide](docs/README.md). Source packages remain directly importable from
+the repository root; `scripts/` contains commands and `docs/` contains written
+research records.
+
 A controlled study of **vision-language-action** architecture. One identical
 19.2M-parameter head (token adapter + DiT flow-matching decoder) is trained
 against **frozen** published backbones, layer-matched, on the same data and
@@ -14,7 +21,7 @@ decide whether a policy actually succeeds in the loop.
 the read depth, the training recipe and the evaluation protocol, so a difference
 in success rate is attributable to the factor that moved.
 
-See [OBJECTIVE.md](OBJECTIVE.md) for the framing and [RESULTS.md](RESULTS.md)
+See [OBJECTIVE.md](docs/OBJECTIVE.md) for the framing and [RESULTS.md](docs/RESULTS.md)
 for the full design, hypotheses, statistics and limitations.
 
 ---
@@ -276,50 +283,38 @@ python scripts/report/build_report.py   # -> report/vla_anatomy_report.{html,pdf
 
 ## Project structure
 
-```
-├── OBJECTIVE.md             # Research question and framing
-├── RESULTS.md               # Design, hypotheses, results, limitations
-├── REFERENCES.md            # Literature this study positions against
-│
-├── configs/
-│   ├── base_config.py       # Shared base; all datasets inherit
-│   ├── registry.py          # get_config(dataset, exp_id) factory
-│   ├── libero/              # LIBERO-Goal arms
-│   │   ├── exp03_groot.py           GR00T N1.7,  1 view   62.5% SR
-│   │   ├── exp04_qwen3vl.py         Qwen3-VL-2B, 1 view   68.0% SR
-│   │   ├── exp05_groot_2view.py     GR00T N1.7,  2 views  91.5% SR
-│   │   └── exp06_qwen3vl_2view.py   Qwen3-VL-2B, 2 views  89.0% SR
-│   └── aloha/               # ALOHA transfer-cube, bimanual 14-DOF
-│       ├── exp05_groot_transfer.py    GR00T N1.7   61.25% SR
-│       └── exp06_qwen3vl_transfer.py  Qwen3-VL-2B  51.75% SR
-│
-├── data/
-│   ├── libero/dataset.py    # LiberoDataset (+ frames.py, paraphrases.py)
-│   └── aloha/dataset.py     # AlohaDataset — parquet shards + single mp4
-│
-├── envs/
-│   ├── libero_env.py        # LiberoAgent + LIBERO's 50 fixed init states
-│   └── aloha_env.py         # AlohaAgent + seed_offset for replication
-│
-├── models/
-│   ├── vla.py               # VLAModel, VLMTokenAdapter, PerTokenLoRA
-│   ├── flow_matching.py     # DiTFlowDecoder
-│   └── vla_train.py         # VLATrainModel (adapter + decoder)
-│
-├── scripts/
-│   ├── precompute.py        # 1 · cache frozen-VLM embeddings
-│   ├── train.py             # 2 · train the head on the cache
-│   ├── evaluate.py          # 3 · rollouts (gym-aloha)
-│   ├── eval_libero.py       # 3 · rollouts (LIBERO)
-│   ├── validate_harness.py  # oracle-action replay — is the harness sound?
-│   ├── analysis/            # head diagnostics, probes, figures
-│   └── report/              # HTML + PDF report builder
-│
-└── asset/                   # NOT in git (large files)
-    ├── model/               #   frozen backbone weights
-    ├── dataset/             #   LIBERO-Goal, ALOHA
-    ├── runs/<dataset>/<exp>/#   caches, checkpoints, rollout results
-    └── analysis/            #   diagnostics JSON + figures
+```text
+├── README.md                 # Overview and historical results
+├── plan.md                   # Active camera-ready plan
+├── requirements.txt          # Core dependencies
+├── experiment_protocol.py    # Shared data/seed/provenance checks
+├── configs/                  # Base config + benchmark experiment registry
+├── models/                   # Runtime backbone loader, adapter, action heads
+├── data/                     # Dataset and HDF5 embedding-cache loaders
+├── envs/                     # Simulator wrappers and policy agents
+├── scripts/                  # Canonical pipeline commands
+│   ├── prepare_protocol.py
+│   ├── precompute.py
+│   ├── train.py
+│   ├── evaluate.py / eval_libero.py / offline_eval.py
+│   ├── analysis/             # Diagnostics, probes, paired reporting
+│   ├── validation/ / eval/   # Harness and evaluation studies
+│   ├── data/                 # Download/conversion utilities
+│   ├── plots/ / media/ / report/
+│   └── archive/              # Historical exploratory scripts
+├── tests/                    # Synthetic checks; no experiment execution
+├── docs/                     # Research records, revision workflow, review matrix
+├── manuscript/               # main.tex, outline.md, README.md
+├── report/                   # Saved/generated reports and protocol summaries
+├── baselines/                # Separate baseline reproductions
+├── train.py / inference.py / precompute_embeddings.py / config_loader.py
+│                             # Legacy commands/imports only
+├── asset/                    # Ignored; existing paths retained
+│   ├── models/               # Frozen backbone weights and processors
+│   ├── data/                 # Demonstration datasets
+│   ├── runs/                 # Caches, checkpoints, rollout results, protocols
+│   └── analysis/             # Diagnostics and figures
+└── third_party/              # Ignored upstream checkouts
 ```
 
 ---

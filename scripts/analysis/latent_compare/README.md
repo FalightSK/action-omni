@@ -12,12 +12,12 @@ imports from `analyze.py` directly:
 ## Why cross-validated
 
 A probe fit and scored on the same frames reports capacity, not availability. All
-probe numbers in `RESULTS.md` are cross-validated, which is what licenses the
+probe numbers in `docs/RESULTS.md` are cross-validated, which is what licenses the
 phrase "linearly readable" rather than "linearly fittable".
 
 ## Scope
 
 These measure **availability** — that information is present and linearly
 readable. They do not show a policy uses it. Necessity claims in this project
-come only from closed-loop rollouts; see `OBJECTIVE.md` for why the distinction
+come only from closed-loop rollouts; see `docs/OBJECTIVE.md` for why the distinction
 is enforced.

@@ -5,8 +5,8 @@ asset/**
 !asset/
 !asset/runs/
 !asset/runs/**/.gitkeep
-!asset/dataset/
-!asset/dataset/**/.gitkeep
+!asset/data/
+!asset/data/**/.gitkeep
 
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/

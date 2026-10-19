@@ -1,0 +1,233 @@
+{
+  "default_bf16_reduction": true,
+  "comparisons": {
+    "True": {
+      "first4": {
+        "cosine_min": 0.9980419874191284,
+        "relative_rms_max": 0.06243409588932991,
+        "max_abs": 6.0
+      },
+      "batch1_first": {
+        "cosine_min": 0.9993349313735962,
+        "relative_rms_max": 0.036219216883182526,
+        "max_abs": 2.0
+      },
+      "last4": {
+        "cosine_min": 0.9940693974494934,
+        "relative_rms_max": 0.10878226906061172,
+        "max_abs": 5.5
+      },
+      "batch1_last": {
+        "cosine_min": 0.9976523518562317,
+        "relative_rms_max": 0.06837534159421921,
+        "max_abs": 4.0703125
+      },
+      "same_batch_repeat": {
+        "cosine_min": 0.9999902844429016,
+        "relative_rms_max": 0.0,
+        "max_abs": 0.0
+      },
+      "layers_first4": [
+        {
+          "cosine_min": 0.9976056218147278,
+          "relative_rms_max": 0.06932254135608673,
+          "max_abs": 2.0625
+        },
+        {
+          "cosine_min": 0.9981332421302795,
+          "relative_rms_max": 0.061152659356594086,
+          "max_abs": 3.125
+        },
+        {
+          "cosine_min": 0.9988457560539246,
+          "relative_rms_max": 0.04794774949550629,
+          "max_abs": 5.375
+        },
+        {
+          "cosine_min": 1.0000743865966797,
+          "relative_rms_max": 0.0015620746416971087,
+          "max_abs": 7.5
+        },
+        {
+          "cosine_min": 1.0000742673873901,
+          "relative_rms_max": 0.0015695489710196853,
+          "max_abs": 8.25
+        },
+        {
+          "cosine_min": 1.0000720024108887,
+          "relative_rms_max": 0.0014897469663992524,
+          "max_abs": 8.0
+        },
+        {
+          "cosine_min": 1.000070333480835,
+          "relative_rms_max": 0.0014762073988094926,
+          "max_abs": 7.5
+        },
+        {
+          "cosine_min": 1.0000691413879395,
+          "relative_rms_max": 0.0015184078365564346,
+          "max_abs": 8.25
+        },
+        {
+          "cosine_min": 1.0000685453414917,
+          "relative_rms_max": 0.0015767078148201108,
+          "max_abs": 9.25
+        },
+        {
+          "cosine_min": 1.000072717666626,
+          "relative_rms_max": 0.0016393180703744292,
+          "max_abs": 8.25
+        },
+        {
+          "cosine_min": 1.0000789165496826,
+          "relative_rms_max": 0.0020072031766176224,
+          "max_abs": 7.5
+        },
+        {
+          "cosine_min": 1.0000861883163452,
+          "relative_rms_max": 0.00295333587564528,
+          "max_abs": 13.625
+        },
+        {
+          "cosine_min": 1.0000888109207153,
+          "relative_rms_max": 0.0032854240853339434,
+          "max_abs": 17.25
+        },
+        {
+          "cosine_min": 1.000087857246399,
+          "relative_rms_max": 0.0035421382635831833,
+          "max_abs": 15.9375
+        },
+        {
+          "cosine_min": 1.0000877380371094,
+          "relative_rms_max": 0.003963954281061888,
+          "max_abs": 14.25
+        },
+        {
+          "cosine_min": 1.0000865459442139,
+          "relative_rms_max": 0.004243592265993357,
+          "max_abs": 4.140625
+        },
+        {
+          "cosine_min": 0.9980419874191284,
+          "relative_rms_max": 0.06243409588932991,
+          "max_abs": 6.0
+        }
+      ]
+    },
+    "False": {
+      "first4": {
+        "cosine_min": 0.9999886155128479,
+        "relative_rms_max": 0.0,
+        "max_abs": 0.0
+      },
+      "batch1_first": {
+        "cosine_min": 0.9999907612800598,
+        "relative_rms_max": 0.0,
+        "max_abs": 0.0
+      },
+      "last4": {
+        "cosine_min": 0.9999884963035583,
+        "relative_rms_max": 0.0,
+        "max_abs": 0.0
+      },
+      "batch1_last": {
+        "cosine_min": 0.9999885559082031,
+        "relative_rms_max": 0.0,
+        "max_abs": 0.0
+      },
+      "same_batch_repeat": {
+        "cosine_min": 0.9999886155128479,
+        "relative_rms_max": 0.0,
+        "max_abs": 0.0
+      },
+      "layers_first4": [
+        {
+          "cosine_min": 1.0000102519989014,
+          "relative_rms_max": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "cosine_min": 1.0000020265579224,
+          "relative_rms_max": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "cosine_min": 0.999996542930603,
+          "relative_rms_max": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "cosine_min": 1.0000754594802856,
+          "relative_rms_max": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "cosine_min": 1.0000747442245483,
+          "relative_rms_max": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "cosine_min": 1.0000722408294678,
+          "relative_rms_max": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "cosine_min": 1.0000710487365723,
+          "relative_rms_max": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "cosine_min": 1.0000699758529663,
+          "relative_rms_max": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "cosine_min": 1.0000696182250977,
+          "relative_rms_max": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "cosine_min": 1.0000731945037842,
+          "relative_rms_max": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "cosine_min": 1.0000805854797363,
+          "relative_rms_max": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "cosine_min": 1.0000896453857422,
+          "relative_rms_max": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "cosine_min": 1.00009286403656,
+          "relative_rms_max": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "cosine_min": 1.0000933408737183,
+          "relative_rms_max": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "cosine_min": 1.000095248222351,
+          "relative_rms_max": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "cosine_min": 1.0000944137573242,
+          "relative_rms_max": 0.0,
+          "max_abs": 0.0
+        },
+        {
+          "cosine_min": 0.9999886155128479,
+          "relative_rms_max": 0.0,
+          "max_abs": 0.0
+        }
+      ]
+    }
+  }
+}

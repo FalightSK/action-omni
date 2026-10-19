@@ -10,6 +10,8 @@ accelerate>=0.30.0
 pandas>=2.0.0
 pyarrow>=14.0.0
 numpy>=1.26.0
+h5py>=3.10.0
+scipy>=1.11.0
 
 # Video decoding (AV1 support via system ffmpeg)
 # Run: brew install ffmpeg  (Mac — includes libdav1d for AV1)
@@ -17,6 +19,7 @@ av>=12.0.0
 
 # Image
 Pillow>=10.0.0
+matplotlib>=3.8.0
 
 # Training utilities
 tqdm>=4.66.0

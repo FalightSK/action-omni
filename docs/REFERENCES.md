@@ -1,7 +1,7 @@
 # References
 
 Literature this study positions against. Kept short and load-bearing: each entry
-is here because it constrains a claim made in `RESULTS.md`.
+is here because it constrains a claim made in `docs/RESULTS.md`.
 
 ## Frozen visual backbones for control
 
@@ -22,7 +22,7 @@ anything over its stock base under a fixed head — the comparison this study ru
 | **RT-2** (Brohan et al., 2023) | Finetuning the VLM on robot data produces emergent generalization | Whether the pretraining, rather than the complete system, is what produces the performance |
 | **OpenVLA** (Kim et al., 2024) | A 7B finetuned VLM outperforms prior VLA systems | Same |
 | **Octo** (Team, 2023) | Large-scale robot-data pretraining is the path to generalist policies | Same |
-| **π₀ / π₀.₅** (Black et al., 2024; Intelligence et al., 2025) | VLM plus flow matching, backbone finetuned, for dexterous manipulation | The closest architectural neighbour: same decoder family as this study's DiT flow-matching head, but with a *finetuned* backbone and a much larger action expert. Also the source of the normalisation and timestep-schedule choices audited in `RESULTS.md` §5 |
+| **π₀ / π₀.₅** (Black et al., 2024; Intelligence et al., 2025) | VLM plus flow matching, backbone finetuned, for dexterous manipulation | The closest architectural neighbour: same decoder family as this study's DiT flow-matching head, but with a *finetuned* backbone and a much larger action expert. Also the source of the normalisation and timestep-schedule choices audited in `docs/RESULTS.md` §5 |
 | **GR00T N1** (NVIDIA, 2025) | Robot-pretrained VLM + diffusion head for humanoid manipulation | Supplies one arm of this study's pair; its `select_layer` sets the read depth |
 
 This study does **not** contradict any of these published results — none of their
@@ -32,7 +32,7 @@ That attribution is what is under test.
 
 **These are cited as literature only.** Their reported numbers are not part of
 this study's evidence base and are never pooled with, compared against, or
-tabulated alongside the six arms in `RESULTS.md`. Every number in that document
+tabulated alongside the six arms in `docs/RESULTS.md`. Every number in that document
 comes from this stack, this head and this harness. Mixing an externally reported
 success rate into a table of internally measured ones would compare across
 different heads, action spaces, training budgets and evaluation protocols at

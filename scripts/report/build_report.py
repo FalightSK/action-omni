@@ -21,7 +21,7 @@ the HTML, so the two outputs cannot drift apart in layout.
 Numbers are hard-coded from the measured results rather than recomputed here.
 This file is a presentation layer; recomputing statistics in a report builder
 would create a second source of truth that can silently disagree with
-RESULTS.md. Every figure IS read from disk, so figures cannot go stale.
+docs/RESULTS.md. Every figure IS read from disk, so figures cannot go stale.
 
     python scripts/report/build_report.py
 """
@@ -594,8 +594,8 @@ dimension of fourteen held at a plausible constant while the other thirteen
 behave normally.
 </div>
 
-<p class="meta">Full design, statistics and defect log: <code>RESULTS.md</code> ·
-Framing and component ledger: <code>OBJECTIVE.md</code> ·
+<p class="meta">Full design, statistics and defect log: <code>docs/RESULTS.md</code> ·
+Framing and component ledger: <code>docs/OBJECTIVE.md</code> ·
 Figures: <code>scripts/analysis/plots_paper.py</code></p>
 
 </div>

@@ -1,10 +1,12 @@
 # Camera-ready revision plan
 
-Updated: 18 October 2026 (Asia/Tokyo).
+Updated: 19 October 2026 (Asia/Tokyo).
 
-Status: the submitted paper, reviewer feedback, repository, and available analysis summaries have been inspected. This document records the agreed revision plan. Implementation, new training, new evaluation, and manuscript revisions have not started as part of this planning task.
+Status: the corrected pipeline completed three independent ALOHA transfer-cube / GR00T N1.7 training runs and uninstrumented 50-start evaluations. Success was 5/50, 18/50, and 7/50 (mean 20.0%, sample SD 14.0 percentage points), far below the historical 61.25% result and variable across training seeds despite similar validation losses. Audits found no data-loader, loss, normalization, or action-scaling defect that explains the gap. A paired checkpoint screen reversed direction across two 50-start cohorts and does not justify changing the validation-loss checkpoint selection rule. `scripts/evaluate.py` now runs primary ALOHA rollouts without trace instrumentation unless `--trace PATH` is supplied. The episode-holdout pilot is diagnostic and does not complete the matched Qwen3-VL or LIBERO comparisons. See `docs/camera_ready_validation.md` for the evidence and `docs/CAMERA_READY.md` for the remaining run procedure.
 
-This is the current source of truth for the camera-ready revision. It supersedes the pre-review experimental and writing instructions in `PAPER_OUTLINE.md`, including its former "no new experiments" constraint and predetermined conclusions. The active manuscript outline is maintained at the top of that file. Existing results are historical evidence, not targets the new experiments must reproduce.
+Schedule update: the author's latest clarification supersedes the earlier schedule-completion rule. Use Hugging Face linear warmup/cosine decay to a 1% floor and enable patience at the first validation after `warmup_steps` optimizer updates finish. ALOHA uses 300 warmup updates (about 4.3 epochs), so patience is eligible from epoch 5; 30 non-improving validation epochs stop the run, subject to a hard 300-epoch maximum. At the author's request for faster decay, `lr_decay_epochs=100` now reaches the floor at epoch 100 and holds it afterward; both ALOHA backbones use this setting. This is a diagnostic preset and does not enforce a minimum training duration. Best-checkpoint selection spans all epochs. Use `asset/runs/hf_warmup_patience/` for subsequent runs and reuse the validated feature cache; the completed OneCycle pilot remains separate. This setup update does not launch retraining.
+
+This is the current source of truth for the camera-ready revision. It supersedes the pre-review experimental and writing instructions in `manuscript/outline.md`, including its former "no new experiments" constraint and predetermined conclusions. The active manuscript outline is maintained at the top of that file. Existing results are historical evidence, not targets the new experiments must reproduce.
 
 ## 1. Objective and locked decisions
 
@@ -22,7 +24,7 @@ Preserve the contributions reviewers valued:
 | Item | Decision |
 |---|---|
 | Manuscript length | Six pages maximum. Budget references within those six pages unless official instructions explicitly allow otherwise. |
-| Editable source | The author will supply the original manuscript source. Do not reconstruct the paper from the PDF by default. |
+| Editable source | On 18 October the author explicitly requested a new LaTeX manuscript. `manuscript/main.tex` is now an editable revision draft; the original source is still useful for reconciliation when supplied. |
 | Primary experiments | GR00T N1.7 versus Qwen3-VL-2B on ALOHA transfer-cube and two-camera LIBERO-Goal. |
 | Training replication | Target three independent training seeds per primary configuration. |
 | Validation | Replace random frame splitting with episode-disjoint validation. |
@@ -49,7 +51,7 @@ These are scheduling cutoffs, not a claim that all target experiments will fit. 
 
 - Submitted manuscript: `C:/Users/SK/Downloads/paper_76.pdf`, six pages.
 - Four reviews supplied by the author in this conversation.
-- Repository summaries: `README.md`, `RESULTS.md`, `OBJECTIVE.md`, `REFERENCES.md`, and the existing `PAPER_OUTLINE.md`.
+- Repository summaries: `README.md`, `docs/RESULTS.md`, `docs/OBJECTIVE.md`, `docs/REFERENCES.md`, and the existing `manuscript/outline.md`.
 - Training, caching, dataset, evaluation, model-loading, and analysis implementations.
 - Saved analysis summaries under `asset/analysis/`, including policy agreement, failure taxonomy, head diagnostics, cue probes, and drift analysis.
 
@@ -72,7 +74,7 @@ Sampled representation-analysis HDF5 files are not full policy-training caches. 
 
 ### Preserve existing work
 
-At the audit, `scripts/analysis/plots_paper.py` already had local modifications. `PAPER_OUTLINE.md`, several review documents, and the cue/drift analysis scripts were untracked. Inspect and preserve these changes; do not reset, clean, or overwrite unrelated work. The old outline is retained as a historical record within `PAPER_OUTLINE.md`.
+At the audit, `scripts/analysis/plots_paper.py` already had local modifications. `manuscript/outline.md`, several review documents, and the cue/drift analysis scripts were untracked. Inspect and preserve these changes; do not reset, clean, or overwrite unrelated work. The old outline is retained as a historical record within `manuscript/outline.md`.
 
 ## 3. Reviewer-to-change map
 
@@ -155,27 +157,27 @@ The saved episode-grouped cue probe reports near-perfect prediction of opening f
 | Phase | Deliverable | Depends on | Status |
 |---|---|---|---|
 | A | Finalized plan and active manuscript outline | Discussion and repository audit | Completed by this documentation update. |
-| B | Original editable source and experiment provenance inventory | Author-supplied source; current audit | Pending. Source retrieval does not block phase C. |
-| C | Corrected split, seed, metadata, normalization, and evaluation plumbing | Plan | Not started. |
-| D | Passing correctness checks and measured runtime projection | Phase C | Not started. |
-| E | Primary backbone replications and matched evaluations | Phase D | Not started. |
-| F | Camera controls, then optional Cosmos extension | Primary results secured; runtime gate | Not started. |
-| G | Recomputed analysis and reviewer response matrix | Completed eligible runs | Not started. Can proceed incrementally. |
-| H | Revised six-page manuscript and verified PDF | Source plus final analysis | Not started. |
+| B | Original editable source and experiment provenance inventory | Author-supplied source; current audit | Inventory complete; original source not supplied. Author authorized a new LaTeX draft. |
+| C | Corrected split, seed, metadata, normalization, and evaluation plumbing | Plan | Implemented and exercised by all three completed ALOHA pilot runs; automatic episode retries/partial recovery remain deferred. |
+| D | Passing correctness checks and measured runtime projection | Phase C | Real CUDA training, cache validation, optimizer/resume checks, and simulator evaluations completed. All 23 tests plus 3 subtests pass; full-workload projections and long-duration stability remain unmeasured. |
+| E | Primary backbone replications and matched evaluations | Phase D | Partial: three of twelve target policies (ALOHA GR00T seeds 0–2) and 50-start screens are complete. Matched Qwen3-VL ALOHA and all primary LIBERO runs remain pending. |
+| F | Camera controls, then optional Cosmos extension | Primary results secured; runtime gate | Not started; retain as lower priority until the matched backbone matrix is complete. |
+| G | Recomputed analysis and reviewer response matrix | Completed eligible runs | ALOHA pilot statistics, offline checks, failure diagnostics, and checkpoint screen are recorded. Cross-backbone paired analysis and full reviewer-response matrix remain pending. |
+| H | Revised six-page manuscript and verified PDF | Draft plus final analysis | The active draft includes the pilot and diagnostic caveats and compiles successfully. Final results integration, visual review, author details, and source reconciliation remain pending. |
 
-Do not create a new experiment-management framework. Extend the existing entrypoints and save simple machine-readable manifests/results. Do not launch training, downloads, or additional studies merely because they are listed here; this document describes the subsequent implementation work.
+Do not create a new experiment-management framework. Extend the existing entrypoints and save simple machine-readable manifests/results. The author later authorized full training and evaluation after the initial preparation stage; the three-seed ALOHA GR00T pilot is now complete. Keep any further runs within the agreed core matrix, preserve the fixed protocol and cohort provenance, and do not add optional experiments before securing the matched backbone results.
 
 ## 6. Phase B: source and provenance
 
-- [ ] Obtain the original editable manuscript from the author and establish the normal build method.
+- [ ] Reconcile the new LaTeX draft with the original editable manuscript when the author supplies it. The new source already compiles in the desktop editor.
 - [ ] Preserve the submitted PDF and identify the exact source version from which it was produced if possible.
 - [ ] Check any subsequently supplied checkpoints/results against dataset, read layer, camera configuration, normalization, model state, split, and code version.
 - [ ] Record the source of every recovered artifact. Do not merge unverified summaries with fresh run records.
 - [ ] Preserve the old analysis summaries and submitted figures as historical artifacts.
 - [ ] Record the existing environment/package versions, backbone file identity, and relevant code revision before new runs.
-- [ ] Carry out experimental work independently of source retrieval; delay manuscript-source changes until the supplied source is available.
+- [x] Create and update the editable LaTeX draft explicitly requested by the author, preserving historical-result labels and adding the completed ALOHA pilot. Independent source reconciliation remains pending.
 
-Recovery rule: recovered old policies can help audit the submission, but a policy trained with the old frame split cannot be counted as an episode-holdout replication. New primary results must share the revised protocol.
+Recovery rule: recovered old policies can help audit the submission, but a policy trained with the old frame split cannot be counted as an episode-holdout replication. New primary results must share the revised protocol. Data manifests have been prepared locally without loading or training a VLM: ALOHA has 18,000 training / 2,000 validation frames; LIBERO has 57,490 / 6,238. Exact identities are recorded in the manifests and `report/protocol_summary.json`.
 
 ## 7. Phase C: reproducible data and training protocol
 
@@ -219,14 +221,12 @@ This controls training stochasticity on a fixed data split; it does not estimate
 Use a separate namespace such as:
 
 ```text
-asset/runs/camera_ready_2026_10_18/
-  protocol/                         # split, normalization, evaluation starts
-  <dataset>/<condition>/
-    cache/                          # reusable frozen embeddings + metadata
-    seed_000/                       # independent head, logs, results, traces
-    seed_001/
-    seed_002/
-  analysis/                         # generated tables, tests, figures
+asset/protocols/<dataset>/<protocol_id>.json
+asset/cache/<dataset>/<backbone>/<identity>/vlm_embeddings.h5
+asset/runs/episode_holdout/<dataset>/<condition>/
+  seed_000/                         # independent head, logs, results, traces
+  seed_001/
+  seed_002/
 ```
 
 Keep large binaries in the existing ignored asset hierarchy. Keep concise protocol descriptions and final reporting documentation in the repository. Do not overwrite legacy paths by default.
@@ -238,7 +238,7 @@ Extend existing scripts only where necessary:
 - `scripts/evaluate.py`: retain checkpoint/output controls and add explicit policy-sampling reproducibility and complete evaluation metadata.
 - `scripts/eval_libero.py`: handle each seed's checkpoint/output location correctly and reject material state-dict/configuration mismatches.
 - Existing diagnostics: consume the persisted split instead of reconstructing the legacy frame-random split.
-- `scripts/analysis/plots_paper.py`: derive every revised value and test annotation from generated analysis records, removing hard-coded historical success rates and p-values.
+- Revised table/figure export is implemented in `scripts/analysis/paired_results.py --report-dir`, deriving values from eligible records. The existing `scripts/analysis/plots_paper.py` remains a historical entrypoint; its hard-coded old results must not be used for the revision.
 
 Preserve existing callers where practical; use explicit new arguments for the camera-ready protocol rather than silently changing legacy defaults. Reuse installed numerical libraries and existing model loaders. Add no dependency unless the current environments cannot perform the required operation.
 
@@ -246,18 +246,19 @@ Preserve existing callers where practical; use explicit new arguments for the ca
 
 Complete small, meaningful checks before committing to long training. Smoke checks are not reported success-rate experiments.
 
-- [ ] Training/validation episode sets are disjoint, exhaustive, and identical across matched arms.
+- [x] Training/validation episode sets are disjoint and exhaustive in the prepared manifests; matched arms consume the same persisted assignments.
 - [ ] Chunks remain within their originating episode and split.
-- [ ] ALOHA normalization depends only on training episodes and is invertible to numerical tolerance.
+- [x] ALOHA normalization is computed from training episodes only; synthetic holdout perturbation leaves those statistics unchanged. Live simulator roundtrip validation remains pending.
 - [ ] Cached and live features agree for the same raw observations within the expected precision; compare real tokens, masks, padding, camera order, layer read, and final norm.
 - [ ] Verify actual image sizes/token grids rather than copying the manuscript descriptions.
 - [ ] Model/config/head shapes agree; unexplained missing or unexpected checkpoint tensors cause failure.
 - [ ] Short same-seed training checks reproduce initialization and sample order; distinct seeds produce distinct initialization/training streams.
 - [ ] Resume restores RNG state, optimizer/scheduler state, and epoch accounting; incompatible resumes are rejected.
+- [x] Bounded real-data GPU observation: ALOHA exp05 at batch 256 and LIBERO exp05 at batch 128, six workers, finite gradients/effective updates, and interrupted resume matching the uninterrupted model exactly. This does not close the complete-protocol or long-duration gates above.
 - [ ] Simulator observations, action scaling, executed horizon, and gripper polarity agree with the training representation.
 - [ ] LIBERO demonstration replay and ALOHA action-plumbing checks have no unexplained regressions. A replay rate is not a policy ceiling, and the ALOHA plumbing check is not full success-detector validation.
-- [ ] Statistics checks reproduce known 2x2-table calculations and a verified Wilson formula; tests cover zero-discordance and all-success/all-failure cases.
-- [ ] Analysis rejects unmatched/duplicate episode keys and inconsistent cohorts instead of truncating arrays to equal length.
+- [x] Statistics checks reproduce known 2x2-table calculations and a verified Wilson formula; tests cover zero-discordance and all-success/all-failure cases.
+- [x] Analysis rejects unmatched/duplicate episode keys and inconsistent cohorts instead of truncating arrays to equal length.
 
 Measure cache production, representative training epoch time, and rollout throughput in both environments. Include model-load, validation, checkpointing, analysis, and I/O costs. Project the cost of the core set before adding optional work; use measured estimates rather than promising a fixed number of GPU-hours.
 
@@ -509,7 +510,7 @@ The endpoint contrast includes multiple adaptation stages. Without the optional 
 | A seed is partially complete | Preserve its artifacts and explain status. Use completed matched pairs for paired comparisons; never select which seeds to include based on outcomes. |
 | Camera controls do not fit | Reduce them to the completed matched seed-0 pair or omit them. Remove unsupported camera magnitudes from the new main results. |
 | Cosmos does not fit | Omit it; state that the intermediate comparison remains future work and maintain endpoint-level attribution. |
-| Original source arrives late | Continue experiment/analysis work and prepare a section-by-section revision specification. Integrate only into the supplied source; report source unavailability as an actual blocker if it persists. |
+| Original source arrives late | Use the explicitly authorized new LaTeX draft and reconcile with the original source later. Keep author details and unsupported results pending. |
 | A correctness defect changes the protocol | Document it, version the protocol, and rerun all affected matched comparisons. Do not pool incompatible versions. |
 | Core results change or reverse | Update the thesis, abstract, figures, and conclusion. Do not adjust settings to recover the old headline. |
 | New validation metrics reflect rollout differences | Report that result and narrow or remove the offline-mismatch claim. |
@@ -559,6 +560,21 @@ The endpoint contrast includes multiple adaptation stages. Without the optional 
 | 2026-10-18 JST | Inspected the submitted six-page PDF, four reviews, current code/configuration, available data/weights, and analysis summaries. Identified missing primary run artifacts and methods/statistics/interpretation discrepancies. |
 | 2026-10-18 JST | Author chose episode holdout, backbone replication first, optional expansion only within the deadline, six-page maximum, and supplying the original manuscript source. |
 | 2026-10-18 JST | Compared Push-T with another pretraining comparison. Prioritized core replication and optional Cosmos; deferred Push-T and another matched lineage to follow-up work. |
-| 2026-10-18 JST | Created this detailed current plan and updated the active manuscript outline. New experiments and manuscript edits remain pending. |
+| 2026-10-18 JST | Created this detailed current plan and updated the active manuscript outline. At that point new experiments and manuscript edits remained pending. |
+| 2026-10-18 JST | Author authorized code implementation and a new LaTeX draft, explicitly deferring retraining until confirmation. Implemented the opt-in protocol, metadata/seed/checkpoint changes, paired reporter, checkpoint-specific diagnostics, and optional Cosmos config. Prepared real-data episode splits without encoding or training. |
+| 2026-10-18 JST | Wrote `manuscript/main.tex` with historical/pending evidence labels. Desktop compiler succeeded with a six-page guard. Synthetic validation covers 16 tests, including inference without optimization and canonical padding across batch layouts. Live parity/harness, optimizer/resume and throughput checks remain pending; implementation/reviewer documentation records these limits. |
+| 2026-10-18 JST | At the author's request, realigned the existing open manuscript with all six pages of `paper_76.pdf`: restored the original seven-section progression, six numerical result tables, and the same 13 cited works in original order. Verified primary reference records, corrected RoboVLMs' first-author metadata and identified N1.7 by its released model card. Retained reviewer-driven statistical/causal corrections and historical/pending labels; figures are not yet reconstructed. Citation/label checks and the desktop compiler with six-page guard passed. No training or rollouts were launched. |
+| 2026-10-18 JST | Restructured with the requested ponytail skill: research/review/workflow documents moved into `docs/`, outline moved to `manuscript/outline.md`, runtime backbone loading moved into `models/backbones.py` with an import compatibility shim, and root CLI wrappers now delegate to the canonical pipeline. Updated links, structure guides, direct dependency declarations, and provenance hashing. The active `plan.md`, open `manuscript/main.tex`, configuration import paths, assets, and existing command locations are preserved. All 19 synthetic/import/dispatch checks pass; real-model/simulator gates and retraining remain deferred. |
+| 2026-10-18 JST | Author separately authorized a short training/readiness check. Added and ran `scripts/validation/observe_training.py` on actual CUDA with 16 real GR00T feature frames per benchmark, production-size ALOHA/LIBERO heads and batches (256/128), six HDF5 workers, and shortened schedules. All 36 observed optimizer steps across both benchmarks had finite gradients; both optimizer groups updated. Interrupted/resumed final models matched uninterrupted training exactly; optimizer/scheduler comparisons passed. Peak allocated GPU memory was 2.95/2.40 GiB. Evidence is `asset/runs/readiness/20261018_213803/observation.json`; validation/workflow docs record limitations. All 19 existing tests still pass. Full caches, full policy retraining, simulator rollouts, and long-duration stability remain outside this check. |
+| 2026-10-18 JST | Author requested one completed experiment training run. The initial ALOHA GR00T exp05 seed-0 pipeline used the old `camera_ready_2026_10_18` layout and was later stopped before a completed epoch because the batch-parity audit failed. It was superseded by the reusable-cache runner; other policies/rollouts were not launched. |
+| 2026-10-18 JST | Full-cache parity checks caught BF16 batch-dependent features before a completed training epoch. Stopped and preserved the attempt as `exp05_groot_transfer_attempt_20261018_2204` (ineligible for results). A controlled GPU probe found exact batch-1/4/32 agreement when BF16 reduced-precision accumulation was disabled. Applied that setting to the shared cached/live encoder, recorded it in cache configuration, added exception-safe restoration and a regression test (20 tests pass), and added mandatory real batch-one parity checks before cache completion. Restarted the same condition/seed from scratch with a new cache identity and source snapshot; training settings/outcome selection remain unchanged. |
+
+| 2026-10-18 JST | At the author's request, replaced the ignored one-off launcher with tracked `scripts/run_experiment.py`: immutable protocol copies, content-addressed caches shared across seeds, seed-specific outputs, timestamped logs/source snapshots, atomic cache publication after validation, OS duplicate-run locks, and cache/checkpoint reuse on restart. Preserved the interrupted 54% attempt and marked it ineligible. All 23 tests, CLI help, production dry-run and whitespace checks passed. Launched the same full ALOHA GR00T exp05 seed-0 condition at 22:49 JST via the native Windows process provider (PID 41856), with hidden UI and logs outside the tool shell's process tree. Live state is under `asset/runs/episode_holdout/aloha/exp05_groot_transfer/seed_000/`; full training and closed-loop success are not yet completed results. |
+| 2026-10-19 JST | Completed the full ALOHA GR00T seed-0 run and matched 50-scene evaluation. The best checkpoint (epoch 17) scored 5/50 untraced and 6/50 with attention tracing; an epoch-50 10-scene screen scored 0/10. A 4-action replanning diagnostic also scored 0/10. Recomputed holdout loss and per-dimension action metrics, verified action ordering/scaling, cache alignment and GR00T tensor grafting; no implementation defect explains the weak closed-loop score. Changed primary ALOHA evaluation to be uninstrumented by default (`--trace` is opt-in), fixed the no-trace path and CP874 warning, and recorded the evidence in `docs/camera_ready_validation.md`. The single policy is not yet a usable replication of the historical 61.25%; next work is targeted policy/training investigation, then the planned independent seeds. |
+| 2026-10-19 JST | Completed the planned three ALOHA GR00T training seeds and uninstrumented 50-scene evaluations. Success was 5/50, 18/50, and 7/50 (mean 20.0%, sample SD 14.0 percentage points); all used the same scene IDs, while policy-sampling seeds differed by training seed. The historical 61.25% is not reproduced under episode holdout, and nearly identical offline losses do not explain the large closed-loop spread. Updated run records and validation docs; revise manuscript status/results accordingly. No code-level data/loss/scaling defect was found, so do not tune to recover the historical rate without a new justified protocol. |
+| 2026-10-19 JST | Compared seed-1 epoch 17 (minimum validation loss) with post-hoc epoch 25 on two separately sampled, paired 50-start cohorts. The observed direction reversed (18 vs 24 successes, then 29 vs 22); exact McNemar p-values were 0.2863 and 0.2478. No checkpoint replacement is justified. Recorded the cohort-sensitive result and a prospective separate rollout-validation/final-test recommendation in `docs/camera_ready_validation.md`; checkpoint selection remains validation-loss based for the completed pilot. |
+| 2026-10-19 JST | Author requested schedule completion before patience and a standard training schedule. Replaced OneCycle with the installed Transformers warmup/cosine-to-floor scheduler and fixed-beta AdamW; retained existing peak rates, warmup updates and scheduled epoch budgets. Added a configurable 1% floor, post-schedule patience, phase/LR/count logging, and explicit incompatible-schedule resume rejection. CPU regression checks full schedule completion, late improvement resetting patience, LR-floor/adapter-ratio preservation, exact interrupted resume before/after decay and after a late improvement, and no restart after completed patience. Full retraining has not started. |
+| 2026-10-19 JST | Author clarified that patience must begin after warmup optimizer updates, not after the full cosine schedule. Updated the Hugging Face trainer to gate patience on `global_step >= warmup_steps`, restore the hard epoch maximum, remove the extra tail, and record/reject mismatched stopping rules on resume. ALOHA's first eligible validation is epoch 5. Updated CPU regression coverage for mid-epoch/exact-boundary/zero warmup, counter reset, early stopping during decay, hard cap/LR floor, exact resume, and incompatible stopping-rule rejection. This supersedes the immediately preceding unrun setup; no full policy training has started. |
+| 2026-10-19 JST | Author requested faster learning-rate decay. Added an independent `lr_decay_epochs` setting, with ALOHA's shared GR00T/Qwen preset at 100 epochs and the hard maximum at 300. Hugging Face cosine reaches the 1% floor at 100 and remains fixed thereafter; patience still starts after warmup. Other benchmarks keep their full-budget decay unless configured otherwise. Tests cover floor holding, resume after reaching it, and changed-horizon rejection; all 24 tests and 8 subtests pass. This does not set a minimum epoch floor, start retraining, or establish improved closed-loop performance. |
 
 Update the progress log, completed checkboxes, actual run counts, runtime projections, and deviations as execution proceeds. Keep planned, running, completed, failed, and deferred work distinct.
