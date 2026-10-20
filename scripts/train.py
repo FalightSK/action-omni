@@ -137,6 +137,30 @@ def _get_embedding_dataset(dataset_name: str, cache_path: str, expect_layers=Non
     raise NotImplementedError(f"Dataset {dataset_name!r} not yet implemented.")
 
 
+def prime_backbone_image_token_id(cfg) -> int:
+    """Resolve the same processor token used by precompute before cache validation/signing."""
+    from transformers import AutoConfig, AutoProcessor
+    from models.backbones import MODELS, _img_token_id
+
+    if cfg.vlm_backbone == "groot":
+        model_root = MODELS / "cosmos_reason2_2b"
+        if not model_root.exists():
+            model_root = MODELS / "cosmos_reason2_2b_tok"
+        processor_kwargs = {"size": {"shortest_edge": 256 * 256,
+                                     "longest_edge": 256 * 256}}
+    elif cfg.vlm_backbone == "qwen3vl":
+        model_root = MODELS / "qwen3_vl_2b"
+        processor_kwargs = {"size": {"shortest_edge": 256 * 256,
+                                     "longest_edge": 256 * 256}}
+    else:
+        raise ValueError(f"Unsupported success-study backbone: {cfg.vlm_backbone}")
+
+    processor = AutoProcessor.from_pretrained(str(model_root), **processor_kwargs)
+    backbone_config = AutoConfig.from_pretrained(str(model_root))
+    cfg.image_token_id = int(_img_token_id(backbone_config, processor))
+    return cfg.image_token_id
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Train VLA adapter + decoder")
     parser.add_argument("--dataset",    type=str, default="pusht",
@@ -220,8 +244,13 @@ def main(argv: list[str] | None = None) -> None:
         rollout_dataset_config = rollout_config["datasets"][args.dataset]
         if rollout_stopping_config.get("maximum_epochs") is not None:
             raise ValueError("Success-stopped study must not define a maximum epoch limit")
-        if args.online_encoder is not True or args.split_manifest is None or args.seed is None:
-            raise ValueError("Success-stopped study requires --online-encoder, --split-manifest, and --seed")
+        rollout_feature_mode = rollout_config.get("feature_mode", "online")
+        if rollout_feature_mode not in {"online", "cached"}:
+            raise ValueError("Success-stopped study feature_mode must be online or cached")
+        if args.online_encoder != (rollout_feature_mode == "online"):
+            raise ValueError(f"Success-stopped study requires feature_mode={rollout_feature_mode!r}")
+        if args.split_manifest is None or args.seed is None:
+            raise ValueError("Success-stopped study requires --split-manifest and --seed")
         if args.epochs is not None or args.max_steps is not None or args.fresh:
             raise ValueError("Success-stopped study disallows --epochs, --max-steps, and --fresh")
         if args.exp not in {rollout_config["backbones"]["groot"], rollout_config["backbones"]["qwen3vl"]}:
@@ -270,6 +299,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.seed is not None:
         seed_everything(args.seed)
     feature_mode = "online" if args.online_encoder else "cached"
+    if rollout_config is not None and feature_mode == "cached":
+        # Precompute loads VLAModel, which resolves this field from the processor
+        # before writing cache_config. The runner and trainer must sign/validate
+        # the exact same resolved config rather than the dataclass placeholder.
+        prime_backbone_image_token_id(cfg)
     if args.online_encoder and args.dataset not in ("aloha", "libero"):
         raise ValueError("--online-encoder currently supports only aloha and libero")
     log_event("training.started", dataset=args.dataset, experiment=args.exp,

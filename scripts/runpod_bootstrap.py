@@ -157,14 +157,30 @@ def main(payload: dict) -> None:
                 "--durable-root", str(durable), "--aloha-python", aloha_python,
                 "--libero-python", libero_python, "--aloha-gl", "egl", "--poll-seconds", "15"])
         else:
+            study_id = payload["study_id"]
+            if not study_id.startswith("runpod_success_stopped_") or not study_id.endswith("_" + role):
+                raise ValueError("Study namespace does not match the training role")
             run("runtime_setup", ["bash", "scripts/setup_runpod_train.sh", role, str(durable)])
             python = str(root / ".venv/bin/python")
             run("unit_checks", [python, "-m", "unittest", "scripts.success_stopping",
                 "tests.test_success_queue", "tests.test_eval_worker_queue",
                 "tests.test_vision_patch_projection", "tests.test_online_encoder_stage",
                 "tests.test_checkpoint_io", "tests.test_runpod_success_study",
-                "tests.test_plot_study_losses", "-v"])
+                "tests.test_plot_study_losses", "tests.test_prepare_cached_study", "-v"])
+            plan_path = root / "configs/runpod_cached_success_study.json"
+            run("gpu_layout_check", [python, "-c",
+                "import torch,json; assert torch.cuda.device_count()==1; "
+                "name=torch.cuda.get_device_name(0); "
+                "assert 'B300' in name; "
+                "print(json.dumps({'event':'bootstrap.gpu_layout_verified','name':name,"
+                "'memory_bytes':torch.cuda.get_device_properties(0).total_memory}))"])
+            cache_command = [python, "-u", "scripts/prepare_cached_study.py",
+                "--dataset", role, "--durable-root", str(durable), "--study-id", study_id,
+                "--plan", str(plan_path)]
+            run("prepare_feature_caches", cache_command)
             migration = payload.get("preselection_migration")
+            if not migration:
+                raise ValueError("Cached continuation requires its reviewed migration payload")
             if migration:
                 migration_code = base64.b64decode(migration["base64"])
                 if sha(migration_code) != migration["sha256"]:
@@ -174,19 +190,21 @@ def main(payload: dict) -> None:
                 run("preselection_continuation", [python, "-u", str(migration_path),
                     "--dataset", role, "--durable-root", str(durable),
                     "--new-source-archive", payload["source_archive"],
-                    "--new-study-id", "runpod_success_stopped_v4_" + role])
+                    "--cache-manifest", str(durable / "success_studies" / study_id / "feature_caches"),
+                    "--new-study-id", study_id])
                 run("loss_curve_backfill", [python, "-c",
                     "from pathlib import Path; from scripts.plot_study_losses import plot_run_losses; "
                     "from experiment_protocol import file_digest; import json; "
-                    "root=Path(" + repr(str(durable / "success_studies" / ("runpod_success_stopped_v4_" + role))) + "); "
+                    "root=Path(" + repr(str(durable / "success_studies" / study_id)) + "); "
                     "curves=[plot_run_losses(h.parent) for h in root.rglob('history.jsonl')]; "
                     "print(json.dumps({'event':'training.loss_curves_backfilled', 'curves':"
                     "[{'path':str(p), 'bytes':p.stat().st_size, 'sha256':file_digest(p)} for p in curves if p]}))"])
-            # Check encoder parity on the first real batch, then train directly.
-            run("success_study", [python, "-u", "scripts/runpod_success_study.py",
+            command = [python, "-u", "scripts/runpod_success_study.py",
                 "--dataset", role, "--durable-root", str(durable),
-                "--run-root", str(root / "asset/runs" / ("runpod_success_stopped_v4_" + role)),
-                "--workers", "1", "--parallel-policies", "2"])
+                "--plan", str(plan_path),
+                "--run-root", str(root / "asset/runs" / study_id),
+                "--workers", "1", "--parallel-policies", "2"]
+            run("success_study", command)
         event("complete", status="complete")
     except BaseException as exc:
         event("failed", status="failed", error_type=type(exc).__name__, error=str(exc),

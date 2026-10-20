@@ -22,8 +22,9 @@ sys.path.insert(0, str(ROOT))
 import torch
 
 from configs.registry import get_config
-from experiment_protocol import (apply_normalization, digest, file_digest, load_protocol,
-                                 run_signature, source_assets, write_json)
+from experiment_protocol import (apply_normalization, cache_config, digest, encoder_code_id,
+                                 file_digest, load_protocol, protocol_arrays, run_signature,
+                                 source_assets, write_json)
 from scripts.run_log import log_event, write_json_atomic
 from scripts.success_queue import publish_rollout_task
 
@@ -65,8 +66,9 @@ def build_jobs(plan: dict, dataset: str, run_root: Path, workers: int,
                plan_path: Path, durable_root: Path) -> list[dict]:
     if plan.get("schema") != 2 or plan.get("checkpoint_rule") != "highest_development_success_rate_earliest_tie":
         raise ValueError("Unsupported success-stopped study schema or checkpoint rule")
-    if plan.get("feature_mode") != "online" or plan.get("training_seeds") != [3, 4, 5]:
-        raise ValueError("Success-stopped plan must use online encoding and independent seeds [3,4,5]")
+    feature_mode = plan.get("feature_mode", "online")
+    if feature_mode not in {"online", "cached"} or plan.get("training_seeds") != [3, 4, 5]:
+        raise ValueError("Success-stopped plan must use online/cached encoding and independent seeds [3,4,5]")
     if dataset not in plan.get("datasets", {}):
         raise ValueError(f"Dataset is absent from the locked success study: {dataset}")
     stopping = plan["stopping"]
@@ -76,6 +78,8 @@ def build_jobs(plan: dict, dataset: str, run_root: Path, workers: int,
     setting = plan["datasets"][dataset]
     protocol_path = ROOT / setting["split_manifest"]
     protocol = load_protocol(protocol_path, dataset)
+    study_id = run_root.name
+    validated_caches: dict[Path, dict] = {}
     for seed in plan["training_seeds"]:
         for experiment in (plan["backbones"]["groot"], plan["backbones"]["qwen3vl"]):
             cfg = get_config(dataset, experiment)
@@ -96,10 +100,27 @@ def build_jobs(plan: dict, dataset: str, run_root: Path, workers: int,
             run = run_root / dataset / Path(cfg.output_dir).name / f"seed_{seed:03d}"
             durable_run = (durable_root / "success_studies" / run_root.name / dataset
                            / run.relative_to(run_root))
+            cache_path = None
+            if feature_mode == "cached":
+                cache_path = (ROOT / "asset/cache/cached_success_study" / study_id / dataset
+                              / experiment / "vlm_embeddings.h5").resolve()
+                cfg.embeddings_cache = str(cache_path)
+                durable_cache = (durable_root / "success_studies" / study_id / "feature_caches"
+                                 / dataset / experiment / "vlm_embeddings.h5").resolve()
+                if cache_path not in validated_caches:
+                    validated_caches[cache_path] = validate_cached_cache(
+                        cache_path, durable_cache, dataset=dataset, experiment=experiment,
+                        backbone=cfg.vlm_backbone, study_id=study_id, plan_id=digest(plan),
+                        protocol=protocol, cfg=cfg, locked_source_assets=assets)
             run_cfg = json.loads(json.dumps({**asdict(cfg), "output_dir": str(run)}))
             command = [sys.executable, "-u", str(ROOT / "scripts/train.py"),
                        "--dataset", dataset, "--exp", experiment, "--seed", str(seed),
-                       "--split-manifest", str(protocol_path), "--online-encoder",
+                       "--split-manifest", str(protocol_path)]
+            if feature_mode == "online":
+                command.append("--online-encoder")
+            else:
+                command.extend(["--cache", str(cache_path)])
+            command.extend([
                        "--output-dir", str(run), "--workers", str(workers),
                        "--cpu-threads", "2",
                        "--batch-size", str(plan["effective_batch_size"]),
@@ -110,16 +131,109 @@ def build_jobs(plan: dict, dataset: str, run_root: Path, workers: int,
                        "--rollout-durable-root", str(durable_root),
                        "--rollout-durable-run-dir", str(durable_run),
                        "--rollout-study-id", run_root.name,
-                       "--rollout-plan-id", digest(plan)]
+                       "--rollout-plan-id", digest(plan)])
             jobs.append({"dataset": dataset, "experiment": experiment,
                          "backbone": cfg.vlm_backbone, "training_seed": seed,
+                         "feature_mode": feature_mode,
                          "protocol_id": protocol["protocol_id"], "protocol": protocol,
                          "protocol_path": protocol_path,
                          "run_signature": run_signature(cfg, protocol, seed),
                          "config": run_cfg, "run": run, "durable_run": durable_run,
-                         "command": command,
+                         "command": command, "cache": str(cache_path) if cache_path else None,
+                         "cache_id": (validated_caches[cache_path]["cache_id"]
+                                      if cache_path else None),
+                         "cache_sha256": (validated_caches[cache_path]["sha256"]
+                                          if cache_path else None),
                          "source_assets": assets, "settings": setting})
     return jobs
+
+
+def validate_cached_cache(cache_path: Path, durable_cache: Path, *, dataset: str,
+                          experiment: str, backbone: str, study_id: str, plan_id: str,
+                          protocol: dict, cfg, locked_source_assets: dict) -> dict:
+    """Fail closed unless the staged local HDF5 cache and its publisher manifest agree."""
+    manifest_path = cache_path.with_name(cache_path.name + ".manifest.json")
+    if not cache_path.is_file() or not manifest_path.is_file():
+        raise FileNotFoundError(
+            f"Cached success study requires staged cache and sidecar: {cache_path} "
+            f"(manifest {manifest_path})")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    expected_manifest = {
+        "schema": 1, "dataset": dataset, "experiment": experiment, "backbone": backbone,
+        "study_id": study_id, "plan_id": plan_id, "protocol_id": protocol["protocol_id"],
+        "encoder_code_id": encoder_code_id(), "source_assets": locked_source_assets,
+        "size_bytes": cache_path.stat().st_size, "local_path": str(cache_path.resolve()),
+        "durable_path": str(durable_cache.resolve()),
+    }
+    mismatches = {key: (manifest.get(key), expected)
+                  for key, expected in expected_manifest.items()
+                  if manifest.get(key) != expected}
+    actual_sha = file_digest(cache_path)
+    if manifest.get("sha256") != actual_sha:
+        mismatches["sha256"] = (manifest.get("sha256"), actual_sha)
+    if mismatches:
+        raise ValueError(f"Cached study manifest mismatch for {cache_path}: {mismatches}")
+
+    import h5py
+    with h5py.File(cache_path, "r") as cache:
+        attrs = cache.attrs
+        expected_ids, expected_validation = protocol_arrays(protocol)
+        expected_samples = int(protocol["n_samples"])
+        required_datasets = {"embeddings", "img_masks", "states", "actions",
+                             "episode_ids", "validation_mask"}
+        missing = required_datasets.difference(cache.keys())
+        if missing:
+            raise ValueError(f"Cached HDF5 datasets missing from {cache_path}: {sorted(missing)}")
+        layer_count = len(cfg.vlm_extract_layers)
+        embedding_shape = ((expected_samples, layer_count, cfg.img_seq_len, cfg.vlm_hidden_size)
+                           if layer_count > 1 else
+                           (expected_samples, cfg.img_seq_len, cfg.vlm_hidden_size))
+        parity = json.loads(attrs.get("batch_one_parity", "{}"))
+        actual = {
+            "complete": bool(attrs.get("complete", False)),
+            "n_samples": int(attrs.get("n_samples", -1)),
+            "dataset": attrs.get("dataset"), "experiment": attrs.get("exp_id"),
+            "protocol_id": attrs.get("protocol_id"), "cache_id": attrs.get("cache_id"),
+            "encoder_code_id": attrs.get("encoder_code_id"),
+            "source_assets": json.loads(attrs.get("source_assets", "null")),
+            "cache_config": json.loads(attrs.get("cache_config", "null")),
+            "full_dataset": bool(attrs.get("full_dataset", False)),
+            "layers": tuple(int(x) for x in attrs.get("vlm_extract_layers", ())),
+            "embedding_shape": tuple(cache["embeddings"].shape),
+            "mask_shape": tuple(cache["img_masks"].shape),
+            "state_shape": tuple(cache["states"].shape),
+            "action_shape": tuple(cache["actions"].shape),
+            "episode_ids_match": (tuple(cache["episode_ids"].shape) == (expected_samples,)
+                                  and bool((cache["episode_ids"][:] == expected_ids).all())),
+            "validation_mask_match": (
+                tuple(cache["validation_mask"].shape) == (expected_samples,)
+                and bool((cache["validation_mask"][:].astype(bool)
+                          == expected_validation).all())),
+            "batch_one_parity": (bool(parity.get("rows"))
+                                 and parity.get("masks_equal") is True),
+        }
+    expected_cache = {
+        "complete": True, "n_samples": expected_samples,
+        "dataset": dataset, "experiment": experiment,
+        "protocol_id": protocol["protocol_id"], "cache_id": manifest.get("cache_id"),
+        "encoder_code_id": expected_manifest["encoder_code_id"],
+        "source_assets": locked_source_assets, "cache_config": cache_config(cfg),
+        "full_dataset": True,
+        "layers": tuple(int(x) for x in cfg.vlm_extract_layers),
+        "embedding_shape": embedding_shape,
+        "mask_shape": (expected_samples, cfg.img_seq_len),
+        "state_shape": (expected_samples, cfg.state_dim),
+        "action_shape": (expected_samples, cfg.action_horizon, cfg.action_dim),
+        "episode_ids_match": True, "validation_mask_match": True,
+        "batch_one_parity": True,
+    }
+    hdf5_mismatches = {key: (actual.get(key), expected)
+                       for key, expected in expected_cache.items()
+                       if actual.get(key) != expected}
+    if hdf5_mismatches:
+        raise ValueError(f"Cached HDF5 metadata mismatch for {cache_path}: {hdf5_mismatches}")
+    return {"cache_id": actual["cache_id"], "sha256": actual_sha,
+            "source_assets": actual["source_assets"]}
 
 
 def sync_file(source: Path, destination: Path) -> bool:
@@ -234,7 +348,7 @@ def publish_final(job: dict, *, plan: dict, plan_id: str, study_id: str,
     metadata = {"dataset": job["dataset"], "experiment": job["experiment"],
                 "backbone": job["backbone"], "training_seed": job["training_seed"],
                 "protocol_id": job["protocol_id"], "run_signature": job["run_signature"],
-                "feature_mode": "online", "source_assets": job["source_assets"],
+                "feature_mode": job["feature_mode"], "source_assets": job["source_assets"],
                 "optimizer_step": step, "selection_epoch": selection_epoch,
                 "selected_checkpoint_sha256": selected_sha}
     evaluation = dict(job["settings"]["final_evaluation"])
@@ -272,7 +386,9 @@ def run_training_job(job: dict, *, durable_root: Path, poll_seconds: float,
     log_path.parent.mkdir(parents=True, exist_ok=True)
     status_path = run / "progress_runner.json"
     durable_status_path = durable_run / "progress_runner.json"
-    identity = {key: job[key] for key in ("dataset", "experiment", "training_seed", "backbone")}
+    identity = {key: job.get(key) for key in (
+        "dataset", "experiment", "training_seed", "backbone", "feature_mode", "cache_id",
+        "cache_sha256")}
     status = {"policy_id": policy_key(job), **identity, "stage": "starting",
               "log": str(log_path), "command": command}
     update_job_status(status_path, durable_status_path, status)
@@ -282,9 +398,10 @@ def run_training_job(job: dict, *, durable_root: Path, poll_seconds: float,
     sync_tree(run, durable_run)
     started = time.perf_counter()
     with log_path.open("w", encoding="utf-8") as log:
+        child_env = dict(os.environ, PYTHONIOENCODING="utf-8",
+                         PYTHONUNBUFFERED="1", CUBLAS_WORKSPACE_CONFIG=":4096:8")
         process = subprocess.Popen(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
-                                   env=dict(os.environ, PYTHONIOENCODING="utf-8",
-                                            PYTHONUNBUFFERED="1", CUBLAS_WORKSPACE_CONFIG=":4096:8"))
+                                   env=child_env)
         with registry_lock:
             process_registry[policy_key(job)] = {"process": process, "job": job,
                                                  "log": log_path}
@@ -426,7 +543,9 @@ def main(argv: list[str] | None = None) -> int:
                           "dataset": args.dataset, "jobs": [
                               {"dataset": j["dataset"], "experiment": j["experiment"],
                                "training_seed": j["training_seed"], "run": str(j["run"]),
-                               "run_signature": j["run_signature"], "command": j["command"]}
+                               "run_signature": j["run_signature"],
+                               "feature_mode": j["feature_mode"], "cache_id": j["cache_id"],
+                               "cache_sha256": j["cache_sha256"], "command": j["command"]}
                               for j in jobs], "parallel_policies": args.parallel_policies,
                           "workers_per_policy": args.workers, "cpu_threads_per_policy": 2}, indent=2))
         return 0
@@ -449,7 +568,8 @@ def main(argv: list[str] | None = None) -> int:
     code_hashes = {path: file_digest(ROOT / path) for path in code_paths}
     contract = {"plan_id": plan_id, "plan": plan, "dataset_role": args.dataset,
                 "jobs": [{key: job[key] for key in ("dataset", "experiment", "backbone",
-                                                    "training_seed", "protocol_id", "run_signature")}
+                                                    "training_seed", "protocol_id", "run_signature",
+                                                    "feature_mode", "cache_id", "cache_sha256")}
                          for job in jobs],
                 "workflow_code": code_hashes}
     lock_path = run_root / "locked_success_study.json"
