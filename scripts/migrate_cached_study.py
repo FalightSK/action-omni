@@ -287,7 +287,7 @@ def cache_prepare_report_identity(report: dict) -> str:
     if not isinstance(report.get("caches"), list):
         raise ValueError("Cache preparation report caches must be a list")
     normalized = []
-    expected_item = {"experiment", "cache_id", "local_path", "durable_path",
+    expected_item = {"cache_id", "local_path", "durable_path",
                      "sha256", "size_bytes", "reused"}
     for item in report["caches"]:
         if not isinstance(item, dict) or set(item) != expected_item:
@@ -296,7 +296,7 @@ def cache_prepare_report_identity(report: dict) -> str:
             raise ValueError("Cache preparation report reused status must be boolean")
         # Reused is an operational outcome, not provenance of the cache bytes.
         normalized.append({key: item[key] for key in sorted(expected_item - {"reused"})})
-    normalized.sort(key=lambda item: item["experiment"])
+    normalized.sort(key=lambda item: item["durable_path"])
     return digest({key: report[key] for key in
                    ("schema", "study_id", "plan_id", "dataset", "feature_mode")} |
                   {"caches": normalized})
@@ -315,7 +315,12 @@ def validate_cache_prepare_report(path: Path, *, dataset: str, study_id: str,
         raise ValueError("Cached preparation report differs from v6 plan identity")
     report_by_exp = {}
     for item in report["caches"]:
-        exp = item["experiment"]
+        matches = [exp for exp, manifest in manifest_entries.items()
+                   if Path(item["durable_path"]).resolve()
+                   == Path(manifest["durable_path"]).resolve()]
+        if len(matches) != 1:
+            raise ValueError("Cached preparation report path does not identify one policy arm")
+        exp = matches[0]
         if exp in report_by_exp:
             raise ValueError("Cached preparation report has duplicate experiment entries")
         report_by_exp[exp] = item
@@ -342,7 +347,7 @@ def self_check_cache_prepare_report_identity() -> None:
         "schema": 1, "study_id": "study", "plan_id": "plan",
         "dataset": "aloha", "feature_mode": "cached",
         "completed_utc": "2026-10-20T12:00:00+00:00", "elapsed_s": 12.5,
-        "caches": [{"experiment": "arm", "cache_id": "id",
+        "caches": [{"cache_id": "id",
                     "local_path": "/local/cache.h5", "durable_path": "/cloud/cache.h5",
                     "sha256": "a" * 64, "size_bytes": 123, "reused": False}],
     }
@@ -989,6 +994,3 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-
-

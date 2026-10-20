@@ -2,6 +2,11 @@
 import sys
 import types
 import unittest
+import ast
+import hashlib
+import json
+from pathlib import Path
+import tempfile
 from unittest.mock import Mock, patch
 
 try:
@@ -10,7 +15,8 @@ except ModuleNotFoundError:
     sys.modules["torch"] = types.ModuleType("torch")
 
 from scripts.migrate_cached_study import (
-    self_check_cache_prepare_report_identity, validate_training_source_delta,
+    cache_prepare_report_identity, self_check_cache_prepare_report_identity,
+    validate_cache_prepare_report, validate_training_source_delta,
 )
 
 
@@ -34,6 +40,46 @@ class CachedMigrationGuardTests(unittest.TestCase):
 
     def test_cache_report_timing_changes_preserve_immutable_identity(self):
         self_check_cache_prepare_report_identity()
+
+    def test_report_matches_actual_preparation_return_schema_and_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            caches, evidence, manifests = [], {}, {}
+            for exp in ("exp05", "exp06"):
+                cache = root / exp / "cache.h5"
+                cache.parent.mkdir()
+                cache.write_bytes(exp.encode())
+                sha = hashlib.sha256(cache.read_bytes()).hexdigest()
+                item = {"cache_id": exp, "local_path": str(cache),
+                        "durable_path": str(cache), "sha256": sha,
+                        "size_bytes": cache.stat().st_size, "reused": True}
+                caches.append(item)
+                evidence[exp] = dict(item, path=str(cache))
+                manifests[exp] = dict(item)
+            source = Path(__file__).resolve().parents[1] / "scripts/prepare_cached_study.py"
+            tree = ast.parse(source.read_text(encoding="utf-8"))
+            for function in tree.body:
+                if isinstance(function, ast.FunctionDef) and function.name in {
+                        "_prepare_one", "_wait_reuse"}:
+                    returns = [node.value for node in ast.walk(function)
+                               if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict)]
+                    self.assertTrue(returns)
+                    for value in returns:
+                        self.assertEqual({ast.literal_eval(key) for key in value.keys}, set(caches[0]))
+            report = {"schema": 1, "study_id": "study", "plan_id": "plan",
+                      "dataset": "aloha", "feature_mode": "cached", "caches": caches,
+                      "completed_utc": "2026-10-20T11:43:52+00:00", "elapsed_s": 1.0}
+            path = root / "report.json"
+            path.write_text(json.dumps(report))
+            kwargs = dict(dataset="aloha", study_id="study", plan_id="plan",
+                          experiments=set(evidence), cache_evidence=evidence,
+                          manifest_entries=manifests)
+            self.assertEqual(validate_cache_prepare_report(path, **kwargs),
+                             cache_prepare_report_identity(report))
+            report["caches"][0]["durable_path"] = str(root / "unknown")
+            path.write_text(json.dumps(report))
+            with self.assertRaises(ValueError):
+                validate_cache_prepare_report(path, **kwargs)
 
 
 if __name__ == "__main__":
