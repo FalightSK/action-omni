@@ -18,7 +18,7 @@ class SuccessStoppingController:
     STATE_SCHEMA = 1
 
     def __init__(self, *, minimum_epochs: int = 100,
-                 evaluation_every_epochs: int = 5,
+                 evaluation_every_epochs: int = 10,
                  patience_epochs: int = 30,
                  minimum_improvement: float = 0.0,
                  state: Mapping[str, Any] | None = None):
@@ -131,10 +131,21 @@ class SuccessStoppingController:
 
     def should_stop(self, epoch: int) -> bool:
         last_improvement = self.state["last_improvement_epoch"]
+        evaluated_epoch = min(epoch, int(self.state["last_evaluated_epoch"] or 0))
         return (self.state["pending"] is None
                 and last_improvement is not None
-                and epoch >= self.minimum_epochs + self.patience_epochs
-                and epoch - int(last_improvement) >= self.patience_epochs)
+                and evaluated_epoch >= self.minimum_epochs + self.patience_epochs
+                and evaluated_epoch - int(last_improvement) >= self.patience_epochs)
+
+    def wait_required(self, epoch: int) -> bool:
+        """Bound training lead to one cadence and wait at a possible stop boundary."""
+        pending = self.pending
+        if pending is None:
+            return False
+        improvement_epoch = self.state["last_improvement_epoch"]
+        return ((epoch > int(pending["epoch"]) and self.is_evaluation_epoch(epoch))
+                or (improvement_epoch is not None
+                    and epoch - int(improvement_epoch) >= self.patience_epochs))
 
 
 class SuccessStoppingControllerTests(unittest.TestCase):
@@ -145,17 +156,17 @@ class SuccessStoppingControllerTests(unittest.TestCase):
         self.assertFalse(c.evaluation_due(99))
         self.assertTrue(c.evaluation_due(100))
         c.begin_evaluation(epoch=100, checkpoint_path="cp100", optimizer_step=1)
-        self.assertFalse(c.evaluation_due(105))
+        self.assertFalse(c.evaluation_due(110))
         c.observe_result({"success_rate": 0.2})
-        self.assertTrue(c.evaluation_due(105))
-        self.assertFalse(c.evaluation_due(106))
+        self.assertTrue(c.evaluation_due(110))
+        self.assertFalse(c.evaluation_due(105))
 
     def test_tie_keeps_earliest_and_does_not_reset_patience(self):
         c = SuccessStoppingController()
         c.begin_evaluation(epoch=100, checkpoint_path="cp100", optimizer_step=1)
         c.state["pending"]["checkpoint_sha256"] = "a" * 64
         c.observe_result({"success_rate": 0.2})
-        c.begin_evaluation(epoch=105, checkpoint_path="cp105", optimizer_step=2)
+        c.begin_evaluation(epoch=110, checkpoint_path="cp110", optimizer_step=2)
         result = c.observe_result({"success_rate": 0.2})
         self.assertFalse(result["improved"])
         self.assertEqual(c.state["best_epoch"], 100)
@@ -163,6 +174,9 @@ class SuccessStoppingControllerTests(unittest.TestCase):
         self.assertEqual(c.state["best_checkpoint_sha256"], "a" * 64)
         self.assertEqual(c.state["last_improvement_epoch"], 100)
         self.assertFalse(c.should_stop(129))
+        self.assertFalse(c.should_stop(130))
+        c.begin_evaluation(epoch=130, checkpoint_path="cp130", optimizer_step=3)
+        c.observe_result({"success_rate": 0.2})
         self.assertTrue(c.should_stop(130))
 
     def test_strict_improvement_resets_elapsed_epoch_patience(self):
@@ -174,7 +188,28 @@ class SuccessStoppingControllerTests(unittest.TestCase):
         self.assertTrue(result["improved"])
         self.assertFalse(c.should_stop(130))
         self.assertFalse(c.should_stop(159))
+        self.assertFalse(c.should_stop(160))
+        c.begin_evaluation(epoch=160, checkpoint_path="cp160", optimizer_step=3)
+        c.observe_result({"success_rate": 0.3})
         self.assertTrue(c.should_stop(160))
+
+    def test_async_training_lead_and_patience_boundary(self):
+        c = SuccessStoppingController()
+        c.begin_evaluation(epoch=100, checkpoint_path="cp100", optimizer_step=1000)
+        self.assertFalse(c.wait_required(100))
+        self.assertFalse(c.wait_required(109))
+        self.assertTrue(c.wait_required(110))
+        resumed = SuccessStoppingController(state=c.state_dict())
+        self.assertEqual(resumed.pending["epoch"], 100)
+        resumed.observe_result({"success_rate": 0.2})
+        for epoch in (110, 120):
+            resumed.begin_evaluation(epoch=epoch, checkpoint_path=f"cp{epoch}", optimizer_step=epoch * 10)
+            self.assertFalse(resumed.wait_required(epoch))
+            self.assertFalse(resumed.observe_result({"success_rate": 0.2})["stop_due"])
+        self.assertFalse(resumed.should_stop(130))
+        resumed.begin_evaluation(epoch=130, checkpoint_path="cp130", optimizer_step=1300)
+        self.assertTrue(resumed.wait_required(130))
+        self.assertTrue(resumed.observe_result({"success_rate": 0.2})["stop_due"])
 
     def test_pending_evaluation_round_trips_for_resume(self):
         c = SuccessStoppingController()
@@ -186,6 +221,16 @@ class SuccessStoppingControllerTests(unittest.TestCase):
         resumed.observe_result({"success_rate": 0.0})
         self.assertEqual(resumed.state["best_epoch"], 100)
         self.assertFalse(resumed.should_stop(100))
+
+    def test_resume_replays_due_boundary_after_old_result_commit(self):
+        c = SuccessStoppingController()
+        c.begin_evaluation(epoch=100, checkpoint_path="cp100", optimizer_step=1000)
+        c.observe_result({"success_rate": 0.2})
+        resumed = SuccessStoppingController(state=c.state_dict())
+        self.assertTrue(resumed.evaluation_due(110))
+        resumed.begin_evaluation(epoch=110, checkpoint_path="cp110", optimizer_step=1100)
+        self.assertEqual(resumed.pending["epoch"], 110)
+        self.assertFalse(resumed.evaluation_due(110))
 
 
 if __name__ == "__main__":

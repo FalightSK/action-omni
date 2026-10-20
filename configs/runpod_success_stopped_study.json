@@ -17,7 +17,7 @@
   "stopping": {
     "metric": "development_success_rate",
     "minimum_epochs": 100,
-    "evaluation_every_epochs": 5,
+    "evaluation_every_epochs": 10,
     "patience_epochs": 30,
     "minimum_improvement": 0.0,
     "maximum_epochs": null,

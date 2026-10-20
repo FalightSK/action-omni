@@ -15,8 +15,9 @@ try:
     import torch  # noqa: F401
 except ModuleNotFoundError:
     torch = types.ModuleType("torch")
-    torch.cuda = types.SimpleNamespace(is_available=lambda: False)
     sys.modules["torch"] = torch
+if not hasattr(torch, "cuda"):
+    torch.cuda = types.SimpleNamespace(is_available=lambda: False)
 
 from scripts import runpod_success_study as study
 

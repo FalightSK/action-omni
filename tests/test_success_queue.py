@@ -18,7 +18,7 @@ except ModuleNotFoundError:
     sys.modules["torch"] = types.ModuleType("torch")
 
 from experiment_protocol import digest, file_digest, sampling_seed, write_json
-from scripts.success_queue import publish_rollout_task, validate_rollout_result, wait_for_rollout
+from scripts.success_queue import publish_rollout_task, read_rollout_result, validate_rollout_result, wait_for_rollout
 
 
 class SuccessQueueTests(unittest.TestCase):
@@ -150,6 +150,18 @@ class SuccessQueueTests(unittest.TestCase):
         write_json(result_path, bad)
         with self.assertRaises(TimeoutError):
             wait_for_rollout(task, self.durable, timeout_s=0.02, poll_s=0.005)
+
+    def test_nonblocking_result_read_distinguishes_pending_from_invalid(self):
+        task = self.publish()
+        self.assertIsNone(read_rollout_result(task, self.durable))
+        result = self.aloha_result(task)
+        result_path = self.durable / task["result_path"]
+        write_json(result_path, result)
+        self.assertEqual(read_rollout_result(task, self.durable)["success_rate"], 0.5)
+        result["checkpoint_sha256"] = "f" * 64
+        write_json(result_path, result)
+        with self.assertRaises(ValueError):
+            read_rollout_result(task, self.durable)
 
 
 if __name__ == "__main__":

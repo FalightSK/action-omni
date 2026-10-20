@@ -347,6 +347,26 @@ def _valid_sha256(value: object) -> bool:
             and all(char in "0123456789abcdef" for char in value.lower()))
 
 
+def read_rollout_result(task: Mapping, durable_root: str | Path) -> dict | None:
+    """Read a complete exact result once; missing is pending, invalid is an error."""
+    durable_root = Path(durable_root).resolve()
+    result_path = _result_path(task, durable_root)
+    if not result_path.is_file():
+        return None
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    validated = validate_rollout_result(task, result)
+    if task.get("trajectory_path"):
+        pointer = result.get("trajectory") or {}
+        trace = _relative_path(durable_root, task["trajectory_path"])
+        if (pointer.get("path") != task["trajectory_path"] or not trace.is_file()
+                or trace.stat().st_size != pointer.get("size_bytes")
+                or file_digest(trace) != pointer.get("sha256")):
+            raise ValueError("Final ALOHA rollout trajectory pointer/file failed verification")
+    log_event("success_rollout.result_ready", task_id=task["task_id"],
+              purpose=task["purpose"], success_rate=validated["success_rate"])
+    return validated
+
+
 def wait_for_rollout(task: Mapping, durable_root: str | Path,
                      timeout_s: float, poll_s: float) -> dict:
     """Block training until the evaluator publishes this exact complete rollout."""
@@ -361,18 +381,9 @@ def wait_for_rollout(task: Mapping, durable_root: str | Path,
     while time.monotonic() - started < timeout_s:
         if result_path.is_file():
             try:
-                result = json.loads(result_path.read_text(encoding="utf-8"))
-                validated = validate_rollout_result(task, result)
-                if task.get("trajectory_path"):
-                    pointer = result.get("trajectory") or {}
-                    trace = _relative_path(durable_root, task["trajectory_path"])
-                    if (pointer.get("path") != task["trajectory_path"] or not trace.is_file()
-                            or trace.stat().st_size != pointer.get("size_bytes")
-                            or file_digest(trace) != pointer.get("sha256")):
-                        raise ValueError("Final ALOHA rollout trajectory pointer/file failed verification")
-                log_event("success_rollout.result_ready", task_id=task["task_id"],
-                          purpose=task["purpose"], success_rate=validated["success_rate"])
-                return validated
+                validated = read_rollout_result(task, durable_root)
+                if validated is not None:
+                    return validated
             except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
                 # The atomic result may be absent or not yet complete while the worker is publishing it.
                 last_status = f"result_pending_or_invalid: {type(exc).__name__}: {exc}"

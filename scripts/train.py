@@ -685,6 +685,10 @@ def main(argv: list[str] | None = None) -> None:
         torch.save(payload, tmp)
         tmp.replace(last_path)
         if rollout_controller is not None:
+            for name in ("history.jsonl", "training_curve.png"):
+                artifact = Path(cfg.output_dir) / name
+                if artifact.is_file():
+                    atomic_copy_checkpoint(artifact, durable_counterpart(artifact))
             durable_sha = atomic_copy_checkpoint(last_path, durable_last_path)
             log_event("training.durable_last_committed", path=str(durable_last_path),
                       sha256=durable_sha, epoch=epoch, optimizer_step=global_step,
@@ -836,6 +840,21 @@ def main(argv: list[str] | None = None) -> None:
 
     def ensure_selection_snapshot(pending: dict) -> Path:
         """Materialize the immutable task checkpoint from committed last.pt."""
+        from experiment_protocol import file_digest
+        path = Path(pending["checkpoint_path"])
+        known_sha = pending.get("checkpoint_sha256")
+        if known_sha is not None:
+            if not path.is_file() or file_digest(path) != known_sha:
+                durable_path = durable_counterpart(path)
+                atomic_copy_checkpoint(durable_path, path, known_sha)
+            existing = torch.load(path, map_location="cpu", weights_only=False)
+            validate_recovery_identity(existing, path)
+            if (int(existing.get("epoch", -1)) != int(pending["epoch"])
+                    or int(existing.get("optimizer_step", -1)) != int(pending["optimizer_step"])):
+                raise ValueError("Pending immutable checkpoint epoch/step mismatch")
+            return path
+        if pending.get("task") is not None:
+            raise ValueError("Published rollout is missing its immutable checkpoint SHA")
         recovery = torch.load(last_path, map_location="cpu", weights_only=False)
         persisted_pending = (recovery.get("success_stopping_state") or {}).get("pending")
         if (int(recovery.get("epoch", -1)) != int(pending["epoch"])
@@ -843,7 +862,6 @@ def main(argv: list[str] | None = None) -> None:
                 or int(persisted_pending.get("epoch", -1)) != int(pending["epoch"])
                 or persisted_pending.get("checkpoint_tag") != pending["checkpoint_tag"]):
             raise ValueError("Pending rollout does not match the committed last.pt epoch")
-        path = Path(pending["checkpoint_path"])
         keys_to_omit = {"optim", "scheduler", "rng_state", "train_generator", "val_generator",
                         "best_val_loss", "no_improve", "next_recovery_step",
                         "success_stopping_state"}
@@ -866,15 +884,11 @@ def main(argv: list[str] | None = None) -> None:
             temp = path.with_name(path.name + ".tmp")
             torch.save(selection, temp)
             temp.replace(path)
-        from experiment_protocol import file_digest
         checkpoint_sha = file_digest(path)
-        known_sha = pending.get("checkpoint_sha256")
-        if known_sha is not None and known_sha != checkpoint_sha:
-            raise ValueError("Recovered immutable selection checkpoint SHA differs from last.pt controller state")
         if rollout_controller is not None:
             atomic_copy_checkpoint(path, durable_counterpart(path), checkpoint_sha)
         rollout_controller.state["pending"]["checkpoint_sha256"] = checkpoint_sha
-        save_recovery_checkpoint(int(pending["epoch"]), recovery.get("val_loss"))
+        save_recovery_checkpoint(completed_epoch, validation_metrics.get("flow_matching_loss"))
         return path
 
     def restore_best_checkpoint() -> bool:
@@ -921,10 +935,10 @@ def main(argv: list[str] | None = None) -> None:
         state["best_checkpoint_sha256"] = actual_sha
         return changed
 
-    def process_pending_rollout() -> dict | None:
+    def process_pending_rollout(*, wait: bool = False) -> dict | None:
         if rollout_controller is None or rollout_controller.pending is None:
             return None
-        from scripts.success_queue import publish_rollout_task, wait_for_rollout
+        from scripts.success_queue import publish_rollout_task, read_rollout_result, wait_for_rollout
         pending = rollout_controller.pending
         checkpoint_path = ensure_selection_snapshot(pending)
         task_metadata = {**metadata, "experiment": args.exp,
@@ -937,16 +951,33 @@ def main(argv: list[str] | None = None) -> None:
             rollout_dataset_config["development_evaluation"],
             "development_selection", args.rollout_plan_id,
             args.rollout_study_id, args.rollout_durable_root)
-        rollout_controller.set_pending_task(task)
-        save_recovery_checkpoint(int(pending["epoch"]), validation_metrics.get("flow_matching_loss"))
+        if pending.get("task") is None:
+            rollout_controller.set_pending_task(task)
+            save_recovery_checkpoint(completed_epoch, validation_metrics.get("flow_matching_loss"))
+            log_event("training.rollout_submitted_async", task_id=task["task_id"],
+                      evaluation_epoch=pending["epoch"], training_epoch=completed_epoch,
+                      checkpoint_sha256=task["checkpoint"]["sha256"])
         timeout_s = float(rollout_stopping_config["evaluation_wait_timeout_seconds"])
         poll_s = float(rollout_stopping_config["evaluation_poll_seconds"])
-        log_event("training.rollout_wait_started", task_id=task["task_id"],
-                  epoch=pending["epoch"], checkpoint_sha256=task["checkpoint"]["sha256"],
-                  timeout_s=timeout_s, poll_s=poll_s)
-        update_progress("development_rollout_wait", epoch=pending["epoch"],
-                        optimizer_step=pending["optimizer_step"], task_id=task["task_id"])
-        result = wait_for_rollout(task, args.rollout_durable_root, timeout_s, poll_s)
+        result = read_rollout_result(task, args.rollout_durable_root)
+        if result is None:
+            age_s = (datetime.now(timezone.utc)
+                     - datetime.fromisoformat(task["created_utc"])).total_seconds()
+            if age_s >= timeout_s:
+                raise TimeoutError(f"Rollout {task['task_id']} exceeded {timeout_s}s; task remains recoverable")
+            if not wait:
+                log_event("training.rollout_pending_async", task_id=task["task_id"],
+                          evaluation_epoch=pending["epoch"], training_epoch=completed_epoch,
+                          wait_seconds=round(age_s, 1))
+                return None
+            log_event("training.rollout_wait_started", task_id=task["task_id"],
+                      evaluation_epoch=pending["epoch"], training_epoch=completed_epoch,
+                      checkpoint_sha256=task["checkpoint"]["sha256"],
+                      timeout_s=timeout_s - age_s, poll_s=poll_s)
+            update_progress("development_rollout_wait", epoch=completed_epoch,
+                            optimizer_step=global_step, evaluation_epoch=pending["epoch"],
+                            task_id=task["task_id"])
+            result = wait_for_rollout(task, args.rollout_durable_root, timeout_s - age_s, poll_s)
         transition = rollout_controller.observe_result(result)
         log_event("training.rollout_evaluation_complete", task_id=task["task_id"], **transition)
         with (Path(cfg.output_dir) / "history.jsonl").open("a", encoding="utf-8") as history:
@@ -957,9 +988,9 @@ def main(argv: list[str] | None = None) -> None:
                                       "development_best_success_rate": transition["best_success_rate"],
                                       "development_best_epoch": transition["best_epoch"],
                                       "rollout_task_id": task["task_id"]}) + "\n")
-        save_recovery_checkpoint(int(pending["epoch"]), validation_metrics.get("flow_matching_loss"))
+        save_recovery_checkpoint(completed_epoch, validation_metrics.get("flow_matching_loss"))
         if protocol:
-            manifest_state.update(current_epoch=int(pending["epoch"]),
+            manifest_state.update(current_epoch=completed_epoch,
                                   optimizer_steps=global_step,
                                   success_stopping_state=rollout_controller.state_dict(),
                                   last_development_success_rate=transition["success_rate"],
@@ -973,6 +1004,8 @@ def main(argv: list[str] | None = None) -> None:
     def finalize_rollout_selection() -> dict:
         if rollout_controller is None or rollout_controller.state["best_checkpoint_path"] is None:
             raise ValueError("Cannot stop success-stopped training without a completed baseline rollout")
+        if rollout_controller.pending is not None:
+            raise ValueError("Cannot finalize selection with an unresolved development rollout")
         from experiment_protocol import file_digest
         source = Path(rollout_controller.state["best_checkpoint_path"])
         if not source.is_file():
@@ -1005,6 +1038,7 @@ def main(argv: list[str] | None = None) -> None:
             "selected_checkpoint_path": str(selected_path),
             "selected_checkpoint_sha256": file_digest(selected_path),
             "stopping_epoch": completed_epoch,
+            "evaluation_execution": "asynchronous_one_pending_with_cadence_backpressure",
             "last_improvement_epoch": rollout_controller.state["last_improvement_epoch"],
             "patience_epochs": rollout_controller.patience_epochs,
             "last_development_evaluation_epoch": rollout_controller.state["last_evaluated_epoch"],
@@ -1037,7 +1071,19 @@ def main(argv: list[str] | None = None) -> None:
                   pending=rollout_controller.pending)
     rollout_stop_requested = False
     if rollout_controller is not None and rollout_controller.pending is not None:
-        recovered_transition = process_pending_rollout()
+        recovered_transition = process_pending_rollout(
+            wait=rollout_controller.wait_required(completed_epoch))
+        rollout_stop_requested = bool(recovered_transition and recovered_transition["stop_due"])
+    if (rollout_controller is not None and not rollout_stop_requested
+            and rollout_controller.evaluation_due(completed_epoch)):
+        # Replay a crash after committing the previous result at a due boundary.
+        rollout_controller.begin_evaluation(
+            epoch=completed_epoch,
+            checkpoint_path=str(ckpt_dir / f"selection_epoch_{completed_epoch:06d}.pt"),
+            optimizer_step=global_step)
+        save_recovery_checkpoint(completed_epoch, validation_metrics.get("flow_matching_loss"))
+        recovered_transition = process_pending_rollout(
+            wait=rollout_controller.wait_required(completed_epoch))
         rollout_stop_requested = bool(recovered_transition and recovered_transition["stop_due"])
     if (rollout_controller is not None and not rollout_stop_requested
             and rollout_controller.should_stop(completed_epoch)):
@@ -1135,7 +1181,7 @@ def main(argv: list[str] | None = None) -> None:
         validation_samples_done = 0
         collect_action_metrics = (epoch in args.probe_epochs or epoch == stop_epoch
                                   or (rollout_controller is not None
-                                      and rollout_controller.evaluation_due(epoch)))
+                                      and rollout_controller.is_evaluation_epoch(epoch)))
         action_squared_error = torch.zeros(cfg.action_dim, dtype=torch.float64)
         action_absolute_error = torch.zeros(cfg.action_dim, dtype=torch.float64)
         with (fixed_rng(4242) if args.seed is not None else nullcontext()), torch.no_grad():
@@ -1232,12 +1278,6 @@ def main(argv: list[str] | None = None) -> None:
             previous_tmp.replace(ckpt_dir / "previous.pt")
             while next_recovery_step <= global_step:
                 next_recovery_step += args.checkpoint_every_steps
-        if rollout_controller is not None and rollout_controller.evaluation_due(epoch):
-            selection_path = ckpt_dir / f"selection_epoch_{epoch:06d}.pt"
-            rollout_controller.begin_evaluation(epoch=epoch,
-                                                checkpoint_path=str(selection_path),
-                                                optimizer_step=global_step)
-        save_recovery_checkpoint(epoch, avg_val)
         with (Path(cfg.output_dir) / "history.jsonl").open("a", encoding="utf-8") as history:
             history.write(json.dumps({"epoch": epoch, "global_step": global_step,
                                       "train_loss": avg_train, "validation_loss": avg_val,
@@ -1246,6 +1286,23 @@ def main(argv: list[str] | None = None) -> None:
                                       "phase": phase,
                                       "validation_metrics": validation_metrics,
                                       "seconds": elapsed}) + "\n")
+        with fixed_rng(4242):
+            from scripts.plot_study_losses import plot_run_losses
+            curve_path = plot_run_losses(Path(cfg.output_dir))
+        log_event("training.loss_curve_saved", epoch=epoch, path=str(curve_path))
+        if (rollout_controller is not None and rollout_controller.pending is not None
+                and rollout_controller.is_evaluation_epoch(epoch)):
+            transition = process_pending_rollout(wait=rollout_controller.wait_required(epoch))
+            if transition and transition["stop_due"]:
+                rollout_stop_requested = True
+                finalize_rollout_selection()
+                break
+        if rollout_controller is not None and rollout_controller.evaluation_due(epoch):
+            selection_path = ckpt_dir / f"selection_epoch_{epoch:06d}.pt"
+            rollout_controller.begin_evaluation(epoch=epoch,
+                                                checkpoint_path=str(selection_path),
+                                                optimizer_step=global_step)
+        save_recovery_checkpoint(epoch, avg_val)
 
         if rollout_controller is None and epoch >= cfg.min_epochs \
                 and no_improve >= cfg.early_stop_patience:
@@ -1255,7 +1312,7 @@ def main(argv: list[str] | None = None) -> None:
             break
 
         if rollout_controller is not None and rollout_controller.pending is not None:
-            transition = process_pending_rollout()
+            transition = process_pending_rollout(wait=rollout_controller.wait_required(epoch))
             if transition and transition["stop_due"]:
                 rollout_stop_requested = True
                 log_event("training.early_stop", epoch=epoch, optimizer_step=global_step,

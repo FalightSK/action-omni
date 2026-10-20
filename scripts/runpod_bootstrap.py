@@ -44,7 +44,7 @@ def materialize_source(payload: dict) -> tuple[Path, str]:
     if sha(data) != payload["base_sha256"]:
         raise ValueError("Cloud base source archive SHA-256 mismatch")
     files = {}
-    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
         for member in tar:
             if member.isfile():
                 name = member.name.removeprefix("./")
@@ -162,11 +162,30 @@ def main(payload: dict) -> None:
             run("unit_checks", [python, "-m", "unittest", "scripts.success_stopping",
                 "tests.test_success_queue", "tests.test_eval_worker_queue",
                 "tests.test_vision_patch_projection", "tests.test_online_encoder_stage",
-                "tests.test_checkpoint_io", "tests.test_runpod_success_study", "-v"])
+                "tests.test_checkpoint_io", "tests.test_runpod_success_study",
+                "tests.test_plot_study_losses", "-v"])
+            migration = payload.get("preselection_migration")
+            if migration:
+                migration_code = base64.b64decode(migration["base64"])
+                if sha(migration_code) != migration["sha256"]:
+                    raise ValueError("Preselection continuation script SHA-256 mismatch")
+                migration_path = status_dir / ("preselection_continuation_" + migration["sha256"][:12] + ".py")
+                migration_path.write_bytes(migration_code)
+                run("preselection_continuation", [python, "-u", str(migration_path),
+                    "--dataset", role, "--durable-root", str(durable),
+                    "--new-source-archive", payload["source_archive"],
+                    "--new-study-id", "runpod_success_stopped_v4_" + role])
+                run("loss_curve_backfill", [python, "-c",
+                    "from pathlib import Path; from scripts.plot_study_losses import plot_run_losses; "
+                    "from experiment_protocol import file_digest; import json; "
+                    "root=Path(" + repr(str(durable / "success_studies" / ("runpod_success_stopped_v4_" + role))) + "); "
+                    "curves=[plot_run_losses(h.parent) for h in root.rglob('history.jsonl')]; "
+                    "print(json.dumps({'event':'training.loss_curves_backfilled', 'curves':"
+                    "[{'path':str(p), 'bytes':p.stat().st_size, 'sha256':file_digest(p)} for p in curves if p]}))"])
             # Check encoder parity on the first real batch, then train directly.
             run("success_study", [python, "-u", "scripts/runpod_success_study.py",
                 "--dataset", role, "--durable-root", str(durable),
-                "--run-root", str(root / "asset/runs" / ("runpod_success_stopped_v3_" + role)),
+                "--run-root", str(root / "asset/runs" / ("runpod_success_stopped_v4_" + role)),
                 "--workers", "1", "--parallel-policies", "2"])
         event("complete", status="complete")
     except BaseException as exc:
