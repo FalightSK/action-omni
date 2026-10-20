@@ -70,4 +70,4 @@ class LiberoExp05Groot2View(LiberoExp03Groot):
     # 152 tokens against exp03's 88 — a ~1.7x longer sequence through the DiT
     # cross-attention, so the precompute batch comes down to keep peak VRAM in
     # the same band that measured 70 samples/s for exp03.
-    embed_batch_size: int = 48
+    embed_batch_size: int = 96
