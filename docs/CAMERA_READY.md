@@ -4,19 +4,80 @@ The implementation is opt-in. Three ALOHA GR00T training seeds and 50-start
 screens are complete under the original OneCycle episode-holdout pilot, stored
 in `asset/runs/episode_holdout/aloha/exp05_groot_transfer/`. The updated
 Hugging Face warmup/cosine schedule and patience after warmup below are a separate recipe;
-no full training run has started for it. Commands use a new output root to keep
+its seed-0 usability diagnostic completed at 100 epochs and 60/100 confirmation successes.
+The prospective matched study described below is a further, separately locked protocol.
+Commands use a new output root to keep
 the pilot distinct. Timestamped attempt directories contain training logs,
 source snapshots and cache checks. Shared feature caches are separate from
 training seeds; compatible restarts reuse the cache and resume `last.pt`.
 See [plan.md](../plan.md) for current execution status and
 [commands](../scripts/README.md#one-full-experiment) for the directory layout.
 
-The author separately authorized a bounded GPU training/readiness observation.
-That check is described below; it does not authorize the full experiment matrix.
+The author authorized implementing the replication plan. Historical bounded
+readiness observations are infrastructure checks, not policy-success evidence.
 
 Use the existing `vla` Python for preparation, caching, training, ALOHA, and
 analysis; use `vla_libero` for LIBERO simulation. These are entrypoints under
 `scripts/`; the legacy root `train.py` is not the revised protocol entrypoint.
+
+## Prospective matched study
+
+The tracked protocol is `configs/camera_ready_study.json`. It supersedes the
+older loss-selection examples below for new matched runs. Train new heads at
+seeds 3, 4 and 5 for each arm. Use a fixed endpoint for both backbones within
+each benchmark: ALOHA 100 epochs, LIBERO 120. Minimum equals maximum; final
+checkpoint selection is independent of test success. Save its hash before
+evaluation. Keep the earlier seeds and the 60% usability diagnostic separate.
+
+```powershell
+$py = 'C:\Users\SK\miniconda3\envs\vla\python.exe'
+$liberoPy = 'C:\Users\SK\miniconda3\envs\vla_libero\python.exe'
+& $py scripts/run_study.py --dry-run --libero-python $liberoPy
+# Run the six ALOHA policies first; caches are shared across training seeds.
+& $py scripts/run_study.py --datasets aloha
+# Subsequently run the six LIBERO policies with its simulator environment.
+& $py scripts/run_study.py --datasets libero --libero-python $liberoPy
+# Verify completed records and produce the combined paired report.
+& $py scripts/run_study.py --libero-python $liberoPy
+```
+
+The runner alternates backbone order across seeds, trains/evaluates sequentially,
+and refuses changed locked code/configuration or mismatched evaluation records.
+Repeating the same command resumes training and verifies existing tests rather
+than overwriting them. The lock and status are under
+`asset/runs/camera_ready_fixed_endpoint_v1/locked_study.json` and
+`study_status.json`; logs, source snapshots, checkpoints and curves remain
+traceable to each policy. Plot titles are derived from the actual run metadata.
+
+ALOHA uses 200 shared starts (IDs 10000–10199) per policy; LIBERO uses all 50
+standard starts on each of 10 tasks with canonical instructions. The full
+matrix is 12 trained policies / 4,200 rollouts, not 4,200 training replications.
+The six planned per-seed paired tests retain Holm family size 6, including when
+only the ALOHA subset has completed. Mean and sample SD are across training
+seeds; paired episode tests are conditional on each trained pair. Three seeds
+still give limited precision for training-population conclusions.
+
+Both simulators enable deterministic inference with an explicit cuBLAS workspace,
+disabled TF32 and deterministic PyTorch kernels. Unsupported kernels fail
+explicitly. ALOHA `--trajectory FILE.npz` records state/action/reward without
+requesting attention weights; `--trace` retains the separate attention diagnostic.
+Video outputs are grouped by result filename to avoid overwriting other cohorts.
+Small replay cohorts are mechanism/readiness checks, not success-rate estimates.
+The prospective ALOHA evaluation sets MuJoCo offscreen anti-aliasing samples to
+zero. This removes observed same-seed pixel drift, but changes visual inputs
+from the submitted-paper renderer. Record the setting alongside every result.
+
+Before a long run, check the actual policy with
+`scripts/validation/replay_aloha.py --checkpoint PATH --output-dir NEW_DIRECTORY`.
+This repeats the same two starts without/without/with video and writes
+`replay_check.json`, failing if state/action/reward arrays differ. Enabling
+deterministic kernels alone is not proof of successful replay; inspect this gate.
+The gate passed on the GR00T diagnostic checkpoint with `--render-samples 0`;
+the saved evidence is `asset/runs/readiness/fixed_endpoint_renderer0/replay_check.json`.
+
+This prospective study changes training/checkpoint selection and ALOHA camera
+rendering from the submitted paper. An exact historical reproduction still requires the missing original
+logs/checkpoints and settings; describe that distinction in the manuscript.
 
 ## Available now: inspect and test without retraining
 
@@ -108,7 +169,8 @@ optimizer only until the configured endpoint; later updates hold the floor
 so the cosine cannot rebound. With the current ALOHA dataset/batch, decoder
 LR is approximately 1.62e-4 at epoch 50 (54% of peak), 5.03e-5 at 75 (17%),
 and 3e-6 at 100 (1%). This 100-epoch decay is a diagnostic preset, not a
-demonstrated optimum or a minimum training duration.
+demonstrated optimum. The authorized usability run now sets `min_epochs=100`
+to ensure it reaches this endpoint; this is independent of patience counting.
 `lr_decay_epochs=None` follows the hard epoch maximum on other benchmarks;
 a shortened `--epochs` run also caps the decay horizon to that shorter budget.
 
@@ -119,8 +181,11 @@ epoch 5 (350 updates, after crossing the 300-update warmup boundary). Thirty
 consecutive eligible validations without a new minimum loss stop training;
 improvement resets the count. Cosine decay continues while patience is active,
 followed by a constant floor if training reaches the earlier decay endpoint.
-The run ends when patience expires or epoch 300 is reached, whichever occurs
-first; there is no extra training tail. LIBERO uses the same update-based rule
+ALOHA early stopping is blocked until `min_epochs=100`, while the counter
+continues to track eligible validations. At or after that minimum the run ends
+when patience expires, subject to the hard epoch-300 limit. A validation
+improvement resets the count normally. There is no extra training tail.
+LIBERO uses the same update-based rule
 with a 120-epoch maximum. Validation cadence remains once per epoch.
 `best.pt` tracks the minimum loss across all epochs, including warmup;
 `last.pt` preserves optimizer/scheduler/RNG/patience state. Logs/history record
@@ -131,7 +196,19 @@ The new `--run-root` above protects the pilot and reuses the compatible feature
 cache. Changed training code/signatures and stopping-rule metadata reject
 resuming an old OneCycle or post-schedule-patience run as this recipe; its saved
 source snapshot is required to reproduce its original
-training/inference provenance. No new full training run is launched by this update.
+training/inference provenance. The author's training/evaluation request
+authorized one ALOHA seed-0 usability diagnostic, with its candidate checkpoint
+selection and two confirmation cohorts recorded before launch in
+`asset/runs/hf_warmup_patience/aloha/exp05_groot_transfer/seed_000/diagnostic_plan.json`.
+
+That diagnostic is complete: 100 epochs / 7,000 updates. Minimum-loss epoch 22
+scored 1/50 on the selection cohort versus epoch 100 at 34/50. The selected
+epoch-100 policy then scored 25/50 and 35/50 on untouched cohorts, combined
+60% (Wilson 95% interval 50.2–69.1%). For diagnostic inference, load the
+checkpoint recorded in that run's `selected_policy.json` (`checkpoints/final.pt`).
+The run's `reliability_report.md` records the results and limitations. This
+does not silently replace the earlier pilot's loss-selection protocol; lock
+a shared selection rule before launching further matched paper comparisons.
 
 Config keys: ALOHA `exp05` (GR00T), `exp06` (Qwen3-VL), optional `exp07` (Cosmos);
 LIBERO `exp05`/`exp06` (two views), `exp03`/`exp04` (one-view controls).
@@ -140,7 +217,7 @@ LIBERO `exp05`/`exp06` (two views), `exp03`/`exp04` (one-view controls).
 
 The primary ALOHA evaluation is uninstrumented. Save trace capture for a
 separately named diagnostic run because trace mode changes the attention call
-to request weights. For seed 0, the matched 50-scene screen produced 5/50
+to request weights. For the earlier OneCycle seed 0, the matched screen produced 5/50
 successes untraced and 6/50 traced; that comparison does not establish a
 systematic instrumentation effect. Three uninstrumented training seeds scored
 5/50, 18/50, and 7/50 on the same scene IDs.

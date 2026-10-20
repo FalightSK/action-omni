@@ -48,6 +48,16 @@ from models.vla import VLAModel
 from models.vla_train import VLATrainModel
 
 
+def deterministic_inference():
+    """Make matched seeded rollouts fail explicitly on nondeterministic kernels."""
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+    torch.use_deterministic_algorithms(True)
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
+
 def _run_pusht(cfg, vlm_model, train_model, device, n_ep, save_video, output_path):
     from envs.pusht_env import PushTAgent, run_episode
     import gymnasium as gym
@@ -75,16 +85,19 @@ def _run_pusht(cfg, vlm_model, train_model, device, n_ep, save_video, output_pat
 
 
 def _run_aloha(cfg, vlm_model, train_model, device, n_ep, save_video, output_path,
-               seed_offset: int = 0, trace_path=None, training_seed=None):
+               seed_offset: int = 0, trace_path=None, training_seed=None,
+               record_attention: bool = True, render_samples=None):
     from envs.aloha_env import AlohaAgent, run_episode
     import gymnasium as gym
     import gym_aloha  # noqa
 
     video_dir = Path(cfg.output_dir) / "videos"
+    if output_path is not None:
+        video_dir = video_dir / Path(output_path).stem
     video_dir.mkdir(parents=True, exist_ok=True)
 
     agent = AlohaAgent(vlm_model, train_model, cfg, device,
-                       record_attn=trace_path is not None)
+                       record_attn=trace_path is not None and record_attention)
     print(f"\n   Receding-horizon: predict {cfg.action_horizon} steps, "
           f"execute {cfg.inference_horizon} before re-plan")
     print("   Actions: ABSOLUTE 14-DOF joint targets")
@@ -92,20 +105,28 @@ def _run_aloha(cfg, vlm_model, train_model, device, n_ep, save_video, output_pat
     print("\n[3/4] Starting gym_aloha ...")
     env = gym.make(cfg.env_id, obs_type="pixels_agent_pos",
                    max_episode_steps=cfg.sim_max_steps, disable_env_checker=True)
+    quality = env.unwrapped._env.physics.model.vis.quality
+    if render_samples is not None:
+        quality.offsamples = render_samples
+    actual_samples = int(quality.offsamples)
+    print(f"   Camera offscreen samples: {actual_samples}")
 
     print(f"\n[4/4] Running {n_ep} episodes ...\n")
     results, traces = [], []
-    for ep in range(n_ep):
-        from experiment_protocol import sampling_seed
-        policy_seed = (sampling_seed("aloha", training_seed, 0, ep + seed_offset)
-                       if training_seed is not None else None)
-        r = run_episode(env, agent, cfg, ep, n_ep, save_video, video_dir,
-                        seed_offset=seed_offset, trace=trace_path is not None,
-                        policy_seed=policy_seed)
-        if trace_path is not None:
-            traces.append(r.pop("_trace"))
-        results.append(r)
-    env.close()
+    try:
+        for ep in range(n_ep):
+            from experiment_protocol import sampling_seed
+            policy_seed = (sampling_seed("aloha", training_seed, 0, ep + seed_offset)
+                           if training_seed is not None else None)
+            r = run_episode(env, agent, cfg, ep, n_ep, save_video, video_dir,
+                            seed_offset=seed_offset, trace=trace_path is not None,
+                            policy_seed=policy_seed)
+            r["render_samples"] = actual_samples
+            if trace_path is not None:
+                traces.append(r.pop("_trace"))
+            results.append(r)
+    finally:
+        env.close()
 
     if trace_path is not None:
         # Ragged per-episode arrays -> one npz with an index, rather than 200
@@ -162,16 +183,21 @@ def main(argv: list[str] | None = None) -> None:
                         help="Override checkpoint path (default: <output_dir>/checkpoints/best.pt)")
     parser.add_argument("--episodes",         type=int, default=None,
                         help="Number of eval episodes (default: cfg.sim_episodes, recommend 50+)")
-    parser.add_argument("--trace",            type=str, default=None,
+    capture = parser.add_mutually_exclusive_group()
+    capture.add_argument("--trace",            type=str, default=None,
                         help="ALOHA only: write per-step state/action/reward and "
                              "per-replan attention mass to this .npz. Needed for "
                              "the failure taxonomy; the summary JSON keeps only "
                              "aggregates and cannot say HOW an episode failed.")
+    capture.add_argument("--trajectory", type=str, default=None,
+                         help="ALOHA only: record state/action/reward without requesting attention weights")
     parser.add_argument("--seed-offset",      type=int, default=0,
                         help="ALOHA only: choose a different scene batch. This changes "
                              "evaluation starts, not the number of independently trained policies.")
     parser.add_argument("--no-video",         action="store_true",
                         help="Skip video recording (faster)")
+    parser.add_argument("--render-samples", type=int, choices=(0, 4), default=None,
+                        help="ALOHA camera anti-aliasing: 0 for reproducible rasterization, 4 for legacy default")
     parser.add_argument("--max-steps",        type=int, default=None,
                         help="Override sim_max_steps")
     parser.add_argument("--inference-horizon", type=int, default=None,
@@ -182,6 +208,14 @@ def main(argv: list[str] | None = None) -> None:
                         help="Language Table command type / reward factory: "
                              "block2block|block2absolute (in-dist), separate|point (OOD)")
     args = parser.parse_args(argv)
+    deterministic_inference()
+    trace_path = args.trace or args.trajectory
+    if trace_path is not None and args.dataset != "aloha":
+        parser.error("--trace and --trajectory are only supported for ALOHA")
+    if args.render_samples is not None and args.dataset != "aloha":
+        parser.error("--render-samples is only supported for ALOHA")
+    if args.seed_offset < 0:
+        parser.error("--seed-offset must be nonnegative")
 
     cfg = get_config(args.dataset, args.exp)
     from experiment_protocol import checkpoint_config, file_digest, write_json
@@ -202,8 +236,8 @@ def main(argv: list[str] | None = None) -> None:
         out = Path(args.output) if args.output else ckpt_path.parent.parent / "sim_results.json"
         if out.exists():
             raise FileExistsError(f"Refusing to overwrite evaluation: {out}")
-        if args.trace is not None and Path(args.trace).exists():
-            raise FileExistsError(f"Refusing to overwrite trace: {args.trace}")
+        if trace_path is not None and Path(trace_path).exists():
+            raise FileExistsError(f"Refusing to overwrite trace: {trace_path}")
         args.output = str(out)
         cfg.output_dir = str(ckpt_path.parent.parent)
     print(f"Dataset    : {args.dataset}  |  Exp: {args.exp}")
@@ -238,8 +272,9 @@ def main(argv: list[str] | None = None) -> None:
     train_model = VLATrainModel(cfg).to(device)
     train_model.load_state_dict(ckpt["state_dict"])
     train_model.eval()
-    print(f"   Epoch {ckpt.get('epoch','?')}  |  "
-          f"val_loss={ckpt.get('val_loss', float('nan')):.4f}")
+    loss = ckpt.get("val_loss")
+    loss_label = f"{loss:.4f}" if loss is not None else "unavailable (see history.jsonl)"
+    print(f"   Epoch {ckpt.get('epoch','?')}  |  val_loss={loss_label}")
 
     # ── Run environment ────────────────────────────────────────────────────
     if args.dataset == "pusht":
@@ -251,7 +286,9 @@ def main(argv: list[str] | None = None) -> None:
                              n_ep, not args.no_video,
                              Path(args.output) if args.output else None,
                              seed_offset=args.seed_offset,
-                             trace_path=args.trace, training_seed=training_seed)
+                             trace_path=trace_path, training_seed=training_seed,
+                             record_attention=args.trace is not None,
+                             render_samples=args.render_samples)
     elif args.dataset == "language_table":
         results = _run_language_table(cfg, vlm_model, train_model, device,
                                       n_ep, not args.no_video,
@@ -300,8 +337,12 @@ def main(argv: list[str] | None = None) -> None:
         "checkpoint_sha256": file_digest(ckpt_path),
         "checkpoint_epoch": ckpt.get("epoch"),
         "seed_offset": args.seed_offset,
-        "trace": args.trace,
+        "trace": trace_path,
+        "attention_instrumented": args.trace is not None,
+        "render_samples": results[0]["render_samples"] if args.dataset == "aloha" else None,
         "torch_version": torch.__version__,
+        "deterministic_inference": torch.are_deterministic_algorithms_enabled(),
+        "cublas_workspace_config": os.environ.get("CUBLAS_WORKSPACE_CONFIG"),
         "configuration": asdict(cfg),
     }
     out = Path(args.output) if args.output else Path(cfg.output_dir) / "sim_results.json"

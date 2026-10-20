@@ -218,6 +218,7 @@ def main(argv=None):
             apply_normalization(cfg, protocol)
             cfg.device = "cuda"
             cfg.num_epochs, cfg.warmup_steps = 3, 2
+            cfg.min_epochs = 0
             work = output / f"{dataset}_{args.exp}"
             work.mkdir()
             cfg.embeddings_cache = str(work / "smoke_features.h5")

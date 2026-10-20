@@ -53,7 +53,9 @@ def load_policy(cfg, ckpt_path: Path, device: str):
     state = ck.get("model", ck.get("state_dict", ck))
     missing, unexpected = head.load_state_dict(state, strict=False)
     hard = [k for k in missing if "rotary" not in k and "inv_freq" not in k]
-    print(f"      epoch={ck.get('epoch')} val_loss={ck.get('val_loss'):.4f} "
+    loss = ck.get("val_loss")
+    loss_label = f"{loss:.4f}" if loss is not None else "unavailable (see history.jsonl)"
+    print(f"      epoch={ck.get('epoch')} val_loss={loss_label} "
           f"| missing={len(hard)} unexpected={len(unexpected)}")
     if hard[:3]:
         print(f"      e.g. missing: {hard[:3]}")
@@ -83,6 +85,8 @@ def main() -> int:
     ap.add_argument("--output-dir", type=Path,
                     help="Seed-specific run directory (or supply an absolute --checkpoint)")
     a = ap.parse_args()
+    from scripts.evaluate import deterministic_inference
+    deterministic_inference()
 
     # Resolve through the registry, not a hard-coded import: --exp was being
     # parsed and then ignored, so `--exp exp02` silently rolled out exp01's
@@ -214,7 +218,10 @@ def main() -> int:
                     "cache_id": checkpoint.get("cache_id"),
                     "checkpoint_sha256": file_digest(ckpt),
                     "checkpoint_epoch": checkpoint.get("epoch"),
-                    "torch_version": torch.__version__, "configuration": asdict(cfg)})
+                    "torch_version": torch.__version__,
+                    "deterministic_inference": torch.are_deterministic_algorithms_enabled(),
+                    "cublas_workspace_config": os.environ.get("CUBLAS_WORKSPACE_CONFIG"),
+                    "configuration": asdict(cfg)})
     print(f"\nwrote {dst}")
 
     if base is not None and base < 0.05:

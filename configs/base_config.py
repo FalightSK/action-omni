@@ -113,6 +113,7 @@ class BaseVLAConfig:
     # ── Training ──────────────────────────────────────────────────────────────
     batch_size:          int   = 256
     num_epochs:          int   = 300  # hard maximum training epochs
+    min_epochs:          int   = 0  # patience counts after warmup; stopping is gated by this floor
     lr_decay_epochs: int | None = None  # cosine endpoint; None follows num_epochs
     learning_rate:       float = 3e-4
     min_lr_ratio:        float = 0.01  # cosine floor relative to each group's peak

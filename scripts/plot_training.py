@@ -24,7 +24,10 @@ def plot(history: Path, output: Path) -> None:
     ax.plot(epochs, valid, label="Validation", linewidth=1.8)
     ax.scatter([epochs[best]], [valid[best]], color="tab:orange", zorder=3,
                label=f"Best validation: epoch {epochs[best]}")
-    ax.set(title="ALOHA GR00T transfer-cube training loss", xlabel="Epoch", ylabel="Loss")
+    manifest = history.with_name("run_manifest.json")
+    metadata = json.loads(manifest.read_text(encoding="utf-8")) if manifest.exists() else {}
+    title = f"{metadata.get('dataset', 'Policy').upper()} {metadata.get('config', {}).get('vlm_backbone', '')} training loss"
+    ax.set(title=title, xlabel="Epoch", ylabel="Loss")
     ax.grid(True, alpha=0.25)
     ax.legend()
     fig.savefig(output, dpi=160)

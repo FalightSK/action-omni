@@ -142,11 +142,19 @@ def main(argv=None):
     parser.add_argument("--split-manifest", required=True, type=Path)
     parser.add_argument("--run-root", type=Path, default=ROOT / "asset/runs/episode_holdout")
     parser.add_argument("--workers", type=int, default=6)
+    parser.add_argument("--epochs", type=int, help="Override maximum training epochs")
+    parser.add_argument("--min-epochs", type=int, help="Override the early-stopping epoch floor")
     args = parser.parse_args(argv)
     if args.seed < 0 or args.workers < 0:
         parser.error("seed/workers must be nonnegative")
     os.chdir(ROOT)
     cfg = get_config(args.dataset, args.exp)
+    if args.epochs is not None:
+        cfg.num_epochs = args.epochs
+    if args.min_epochs is not None:
+        cfg.min_epochs = args.min_epochs
+    if cfg.num_epochs < 1 or not 0 <= cfg.min_epochs <= cfg.num_epochs:
+        parser.error("Require epochs > 0 and 0 <= min-epochs <= epochs")
     protocol = load_protocol(args.split_manifest, args.dataset)
     apply_normalization(cfg, protocol)
     experiment = Path(cfg.output_dir).name
@@ -223,7 +231,8 @@ def main(argv=None):
                 execute("training", [sys.executable, "-u", str(ROOT / "scripts/train.py"),
                         "--dataset", args.dataset, "--exp", args.exp, "--seed", str(args.seed),
                         "--split-manifest", str(args.split_manifest.resolve()), "--cache", str(cache),
-                        "--output-dir", str(run), "--workers", str(args.workers)])
+                        "--output-dir", str(run), "--workers", str(args.workers),
+                        "--epochs", str(cfg.num_epochs), "--min-epochs", str(cfg.min_epochs)])
             result = json.loads(manifest.read_text(encoding="utf-8"))
             if result.get("status") != "complete":
                 raise RuntimeError("Trainer did not report successful completion")

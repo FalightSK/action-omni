@@ -161,6 +161,17 @@ class TrainingScheduleTests(unittest.TestCase):
             cfg.lr_decay_epochs = 5
             with self.assertRaisesRegex(ValueError, "Resume LR schedule mismatch"):
                 run(root / "faster_decay")
+            cfg.min_epochs = 7
+            minimum = run(root / "minimum_epochs")
+            self.assertEqual(minimum["epoch"], 7)
+            self.assertEqual(minimum["no_improve"], 3)  # Counted after warmup, stopping deferred.
+            with self.assertRaises(InterruptedError):
+                run(root / "resume_minimum", interrupt_epoch=6)
+            resumed_minimum = run(root / "resume_minimum")
+            self.assertEqual(resumed_minimum["epoch"], minimum["epoch"])
+            self.assertEqual(resumed_minimum["global_step"], minimum["global_step"])
+            for key in minimum["state_dict"]:
+                torch.testing.assert_close(resumed_minimum["state_dict"][key], minimum["state_dict"][key], rtol=0, atol=0)
 
 
 if __name__ == "__main__":

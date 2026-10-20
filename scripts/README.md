@@ -9,6 +9,7 @@ Shared runtime code belongs in `models/`, `data/`, `envs/`, and `configs/`.
 | Command | Purpose |
 |---|---|
 | `run_experiment.py` | Reuse/build a validated shared cache, then resume/train one seed. |
+| `run_study.py` | Lock and run the matched fixed-endpoint replication matrix; `--dry-run` prints commands only. |
 | `prepare_protocol.py` | Prepare episode splits and training-only statistics without a VLM. |
 | `precompute.py` | Cache frozen features (`--dataset --exp`). |
 | `train.py` | Train the adapter/action head on cached features. |
@@ -21,6 +22,13 @@ Shared runtime code belongs in `models/`, `data/`, `envs/`, and `configs/`.
 The [camera-ready workflow](../docs/CAMERA_READY.md) identifies the current opt-in
 protocol and deferred experiment commands. Historical entrypoints do not
 constitute revised experiment results.
+
+The active prospective study uses `configs/camera_ready_study.json`: new seeds
+3–5, fixed final checkpoints (ALOHA 100 epochs, LIBERO 120), 200 ALOHA starts
+and 50 starts per LIBERO task. Start with
+`python scripts/run_study.py --dry-run --datasets aloha`, then remove `--dry-run`
+after the real-policy deterministic replay gate passes. See the workflow above
+for separate simulator environments and final paired reporting.
 
 ## One full experiment
 
@@ -55,8 +63,9 @@ the independent maximum remains 300 epochs. The endpoint is shared by both
 backbones. Other benchmarks default to decay across their full epoch budget.
 Validation patience (30 epochs by default) is enabled as soon as the configured
 warmup optimizer updates finish. For ALOHA, warmup is 300 updates and the first
-eligible validation is epoch 5. Training stops when patience expires or reaches
-its 300-epoch maximum; it can stop during cosine decay. State is resumable across
+eligible validation is epoch 5. ALOHA's diagnostic `min_epochs=100` blocks
+stopping until epoch 100, without deferring the patience count. Training then
+stops on exhausted patience or its 300-epoch maximum. State is resumable across
 warmup, decay and the constant-floor phase. The previous OneCycle pilot stays under
 `asset/runs/episode_holdout/`; its changed training identity requires a separate
 run root for the new recipe. Shared caches are reused.

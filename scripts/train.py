@@ -74,6 +74,8 @@ def main(argv: list[str] | None = None) -> None:
                         help="Override embedding cache path")
     parser.add_argument("--epochs", type=int, default=None,
                         help="Maximum training epochs; configured LR decay horizon is capped to this limit")
+    parser.add_argument("--min-epochs", type=int, default=None,
+                        help="Prevent early stopping before this epoch; patience still counts after warmup")
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--fresh", action="store_true",
                         help="Ignore any last.pt and restart training from epoch 1.")
@@ -104,13 +106,15 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Dataset    : {args.dataset}  |  Exp: {args.exp}")
     print(f"Output dir : {cfg.output_dir}")
     if args.epochs is not None: cfg.num_epochs = args.epochs
+    if args.min_epochs is not None: cfg.min_epochs = args.min_epochs
     if args.batch_size is not None: cfg.batch_size = args.batch_size
     if cfg.batch_size < 1 or cfg.num_epochs < 1 or (args.workers is not None and args.workers < 0):
         raise ValueError("Epochs/batch size must be positive; worker count must be nonnegative")
     if (cfg.early_stop_patience < 1 or cfg.warmup_steps < 0
             or not 0 < cfg.min_lr_ratio <= 1
-            or (cfg.lr_decay_epochs is not None and cfg.lr_decay_epochs < 1)):
-        raise ValueError("Patience/decay epochs must be positive, warmup nonnegative, and min_lr_ratio in (0, 1]")
+            or (cfg.lr_decay_epochs is not None and cfg.lr_decay_epochs < 1)
+            or not 0 <= cfg.min_epochs <= cfg.num_epochs):
+        raise ValueError("Invalid patience/decay/warmup/LR floor; min_epochs must be between 0 and num_epochs")
     if args.dry_run:
         print(json.dumps({"mode": "dry-run; no training", "config": asdict(cfg),
                           "training_seed": args.seed,
@@ -206,6 +210,7 @@ def main(argv: list[str] | None = None) -> None:
     print(f"   LR floor: {cfg.min_lr_ratio:.1%} of peak; patience "
           f"{cfg.early_stop_patience} is enabled after {cfg.warmup_steps} warmup updates "
           f"(first eligible validation: epoch {early_stop_start_epoch})\n")
+    print(f"   Minimum training: {cfg.min_epochs} epochs\n")
 
     global_step   = 0
     best_val_loss = float("inf")
@@ -280,7 +285,8 @@ def main(argv: list[str] | None = None) -> None:
             "early_stop_start_epoch": early_stop_start_epoch,
             "status": "running"})
     completed_epoch = start_epoch - 1
-    stop_epoch = cfg.num_epochs if no_improve < cfg.early_stop_patience else completed_epoch
+    stop_epoch = (cfg.num_epochs if completed_epoch < cfg.min_epochs
+                  or no_improve < cfg.early_stop_patience else completed_epoch)
     for epoch in range(start_epoch, stop_epoch + 1):
         model.train()
         ep_loss = 0.0
@@ -359,7 +365,7 @@ def main(argv: list[str] | None = None) -> None:
                                       "phase": phase,
                                       "seconds": elapsed}) + "\n")
 
-        if no_improve >= cfg.early_stop_patience:
+        if epoch >= cfg.min_epochs and no_improve >= cfg.early_stop_patience:
             print(f"\n[Early stop] No improvement for {cfg.early_stop_patience} epochs.")
             break
 

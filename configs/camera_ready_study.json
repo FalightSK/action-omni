@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "name": "camera_ready_fixed_endpoint_v1",
+  "purpose": "Prospective matched backbone replication after development diagnostics; not an exact reproduction of the submitted protocol",
+  "training_seeds": [3, 4, 5],
+  "checkpoint_rule": "fixed_endpoint_final",
+  "family_size": 6,
+  "datasets": {
+    "aloha": {
+      "split_manifest": "asset/protocols/aloha/97fa699cb307366377cec2eb0f29795d967710f9ffe0fea9d1e1c50108b8d537.json",
+      "experiments": ["exp05", "exp06"],
+      "epochs": 100,
+      "evaluation_episodes": 200,
+      "evaluation_seed_offset": 10000,
+      "render_samples": 0
+    },
+    "libero": {
+      "split_manifest": "asset/protocols/libero/4d1d6267e4270ac86caf491ea9b5fb630eb0e3a8a728822f96e94be9b3e3b0ad.json",
+      "experiments": ["exp05", "exp06"],
+      "epochs": 120,
+      "evaluation_episodes": 50,
+      "evaluation_tasks": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    }
+  }
+}

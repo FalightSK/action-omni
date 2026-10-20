@@ -391,3 +391,78 @@ All **24 tests and 8 subtests pass**, including exact model/scheduler resume
 after the floor is reached, continued floor holding, and changed-decay-horizon
 rejection. Both ALOHA backbone configs resolve to the same 100-epoch endpoint.
 No full training or policy-success evaluation was started.
+
+### Authorized 100-epoch usability diagnostic (19 October; complete)
+
+The author requested actual training and evaluation. Added a minimum-epoch
+stopping gate for the diagnostic (`min_epochs=100`), while keeping patience
+counting after warmup and the 300-epoch hard maximum. The CPU regression
+verifies that resume continues before the minimum even if patience is already
+exhausted; all 24 tests and 8 subtests pass. The real-data smoke observation
+explicitly uses `min_epochs=0` to retain its three-epoch scope.
+
+One new GR00T seed-0 run reused the validated cache and completed 100 epochs /
+7,000 optimizer updates. The loss-selected checkpoint was epoch 22 (validation
+flow loss 0.16536); epoch 100 had worse validation loss, 0.27574. A diagnostic
+plan was saved before training: compare these candidates on 50 validation
+starts with offset 3000, select the larger success count (ties favor the
+offline-best checkpoint), then evaluate the selected policy on two untouched
+50-start cohorts with offsets 4000 and 5000. All runs use uninstrumented 16/8
+action horizons and the same 400-step limit.
+
+| Candidate | Validation flow loss | Successes on matched 50-start selection cohort |
+|---|---:|---:|
+| Offline best, epoch 22 | 0.16536 | 1/50 (2%) |
+| Later policy, epoch 100 | 0.27574 | 34/50 (68%) |
+
+The paired table has 1 shared success, 16 shared failures, 0 early-only and
+33 late-only successes; exact McNemar p is 2.3283e-10, conditional on these
+checkpoints and starts. The late-minus-early difference is 66 points with a
+paired bootstrap interval [52, 78]. This is a validation comparison used for
+selection; it is not an independent final test or evidence across training
+seeds. The epoch-100 checkpoint was selected, with its hash and predeclared
+confirmation cohorts saved in `selected_policy.json` before confirmation.
+Both untouched confirmation batches are complete:
+
+| Cohort | Success | Wilson 95% interval |
+|---|---:|---:|
+| Offset 4000 | 25/50 (50%) | 36.6–63.4% |
+| Offset 5000 | 35/50 (70%) | 56.2–80.9% |
+| Combined | **60/100 (60%)** | **50.2–69.1%** |
+
+Ninety attempts reached the lift stage; 30 of the 40 failed after lifting.
+Maximum reward counts were 0: 3, 1: 7, 2: 30, 4: 60. These stage counts do
+not identify a causal gripper or attention mechanism. The policy learned useful
+task behavior but still fails 40% of fresh starts, so it is not dependable.
+The two cohort rates also illustrate rollout variation for this one policy.
+
+All 200 diagnostic rollouts cover 150 unique starts. Verified matched selection
+sampling, disjoint confirmation starts, checkpoint hashes, counts and inference
+settings. The final estimate excludes selection rollouts. Use the selected
+epoch-100 `checkpoints/final.pt`, rather than the minimum-loss `best.pt`, for
+this diagnostic. Its optional checkpoint `val_loss` metadata is absent; the
+load banner's `nan` is missing metadata, while history records finite 0.27574.
+Saved full evidence in the run's `diagnostic_results.json` and
+`reliability_report.md`, with the curve in `training_loss.png`.
+
+This identifies offline-loss checkpoint selection as a practical weakness;
+longer training and the changed schedule were not isolated experimentally.
+Before the paper's next matched comparisons, lock one common selection rule
+for both backbones and keep rollout-validation starts separate from final tests.
+No training-population reliability or robot-pretraining benefit is inferred
+from this single-run diagnostic. The historical paper protocol is not a matched
+comparison with this revised run.
+
+## Prospective ALOHA replay gate
+
+A same-seed replay of the diagnostic policy under the previous four-sample
+offscreen renderer produced small pixel differences despite identical simulator
+state. The differences propagated to later actions and could change success.
+For the new matched study, the ALOHA evaluator explicitly sets MuJoCo offscreen
+anti-aliasing samples to zero. A simulator-only probe repeated camera frames
+exactly; the full-policy gate then repeated two fixed starts twice without video
+and once with video. Every recorded state, action, and reward array matched
+exactly (`asset/runs/readiness/fixed_endpoint_renderer0/replay_check.json`).
+The gate validates these settings on this machine and checkpoint only. Two
+starts do not estimate policy success, and the prospective visual-input setting
+must be disclosed because it differs from the historical evaluation.
