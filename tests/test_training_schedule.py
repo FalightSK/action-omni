@@ -38,6 +38,57 @@ class TinyHead(nn.Module):
 
 
 class TrainingScheduleTests(unittest.TestCase):
+    def test_fixed_update_budget_probe_and_recovery_resume(self):
+        cfg = BaseVLAConfig(batch_size=4, num_epochs=3, min_epochs=3,
+                            warmup_steps=2, early_stop_patience=30,
+                            learning_rate=0.01, save_every=99, device="cpu")
+        data = [{"embedding": torch.tensor([i / 20, 1.0]),
+                 "state": torch.tensor([0.2, 0.3]),
+                 "actions": torch.tensor([0.4, 0.5])} for i in range(20)]
+        replace = Path.replace
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / "cache.pt"
+            cache.touch()
+
+            def run(output, interrupt_step=None):
+                def commit(path, target):
+                    result = replace(path, target)
+                    if Path(target).name == "last.pt" and interrupt_step is not None:
+                        saved = torch.load(target, map_location="cpu", weights_only=False)
+                        if saved["global_step"] == interrupt_step:
+                            raise InterruptedError("Simulated loss of the remote client")
+                    return result
+
+                with patch.object(trainer, "get_config", side_effect=lambda *_: deepcopy(cfg)), \
+                     patch.object(trainer, "_get_embedding_dataset", return_value=data), \
+                     patch.object(trainer, "VLATrainModel", TinyHead), \
+                     patch.object(Path, "replace", commit), redirect_stdout(io.StringIO()):
+                    trainer.main(["--dataset", "aloha", "--exp", "exp05", "--seed", "17",
+                                  "--cache", str(cache), "--output-dir", str(output), "--workers", "0",
+                                  "--steps-per-epoch", "4", "--max-steps", "12",
+                                  "--warmup-steps", "2", "--lr-decay-steps", "12",
+                                  "--checkpoint-every-steps", "4", "--probe-epochs", "2"])
+                return torch.load(output / "checkpoints/last.pt", map_location="cpu", weights_only=False)
+
+            baseline_dir = root / "baseline"
+            baseline = run(baseline_dir)
+            self.assertEqual(baseline["global_step"], 12)
+            self.assertEqual(baseline["training_seed"], 17)
+            self.assertEqual(baseline["training_mode"], "update_matched")
+            self.assertTrue((baseline_dir / "checkpoints/probe_step_00000008.pt").is_file())
+            previous = torch.load(baseline_dir / "checkpoints/previous.pt", weights_only=False)
+            self.assertEqual(previous["global_step"], 8)
+
+            resumed_dir = root / "resumed"
+            with self.assertRaises(InterruptedError):
+                run(resumed_dir, interrupt_step=8)
+            resumed = run(resumed_dir)
+            self.assertEqual(resumed["global_step"], baseline["global_step"])
+            for key in baseline["state_dict"]:
+                torch.testing.assert_close(resumed["state_dict"][key],
+                                           baseline["state_dict"][key], rtol=0, atol=0)
+
     def test_patience_after_warmup_and_exact_resume(self):
         cfg = BaseVLAConfig(batch_size=4, num_epochs=8, warmup_steps=10,
                             early_stop_patience=2, learning_rate=0.1,

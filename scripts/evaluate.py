@@ -336,6 +336,7 @@ def main(argv: list[str] | None = None) -> None:
         "cache_id": ckpt.get("cache_id"),
         "checkpoint_sha256": file_digest(ckpt_path),
         "checkpoint_epoch": ckpt.get("epoch"),
+        "optimizer_step": ckpt.get("optimizer_step", ckpt.get("global_step")),
         "seed_offset": args.seed_offset,
         "trace": trace_path,
         "attention_instrumented": args.trace is not None,

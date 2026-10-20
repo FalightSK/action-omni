@@ -1,13 +1,14 @@
 # Camera-ready matched-study plan and results
 
-Updated 20 October 2026. All six ALOHA policies are complete and pass the locked verifier. The matched study is paused at the user's request: LIBERO is deferred until a RunPod environment is provided. The GR00T seed-3 LIBERO embedding precompute completed and its cache passed provenance, geometry, finite-value, and parity checks; the worker was stopped in preflight before training or evaluation. The validated cache and earlier interrupted cache files are preserved. Resume only after the RunPod setup is provided.
+Updated 20 October 2026. All six ALOHA policies in `camera_ready_fixed_endpoint_v1` are complete and pass the locked verifier; they remain separate from the new update-matched follow-up. The RunPod follow-up is now deployed on two B300 MIG Pods, one for ALOHA and one for two-camera LIBERO. At the latest live check, both workers were still precomputing GR00T (`exp05`) features for seed 3; no new policy training or evaluation had started. See the [team continuity guide](docs/team_continuity_guide.md) for live paths, monitoring, recovery, and finalization instructions.
 
 ## Current status and scope
 
 - The six ALOHA policies are complete and passed the locked result verifier: GR00T N1.7 and Qwen3-VL, each trained with seeds 3, 4, and 5.
 - Each policy was evaluated on 200 starts. Within each training seed, both backbones used the same initial states, environment seeds, and policy-sampling seeds. The fixed checkpoint was epoch 100.
-- LIBERO is currently deferred at the user's request pending a RunPod environment. One GR00T seed-3 embedding cache is complete and validated, but no LIBERO policy training or evaluation has started. The coordinator and monitor are paused; all ALOHA results and cache artifacts are preserved.
-- Preserve the battery gate for every new heavy training/evaluation stage: if charge is below 35%, wait to start until it reaches 70%; do not interrupt a running stage solely for this gate.
+- The active ALOHA worker was at about 19/625 precompute batches and the LIBERO worker at about 10/2,656 at the latest log check. Their `study_status.json` files show `running` / `precompute`, with no completed policies. These are live-run observations, not final experiment results.
+- The RunPod protocol and plan are locked. Both workers are detached with `nohup`; closing the laptop does not stop them. Do not launch duplicates. Run artifacts sync to `/workspace-global/action-omni/study_v1/runs/`; active embedding caches remain on each Pod's local disk and must be regenerated if lost.
+- Preserve the previously requested battery gate for new local heavy tasks: after charge falls below 35%, wait until it reaches 70% before starting another one. This gate does not interrupt or pause the already-running cloud workers.
 - Detailed verification and calculation notes are in [docs/aloha_results_analysis.md](docs/aloha_results_analysis.md). The submitted baseline is [paper_76.pdf](C:/Users/SK/Downloads/paper_76.pdf).
 - The ALOHA-only paired test output was regenerated from the six verified evaluation files: `asset/runs/camera_ready_fixed_endpoint_v1/paired_aloha_results.json` (input manifest: `paired_aloha.json`).
 
@@ -83,3 +84,47 @@ All unsuccessful rollouts in the new records ended as 400-step truncations: 304 
 | R2: training-run count, training variance, validation split, and whether offline loss answers the question | State three independent training seeds per backbone, report their per-policy outcomes and mean ± SD, document the episode-disjoint 45/5 split and training-only normalization, and answer that loss did not consistently predict the closed-loop winner. |
 | R3: broader backbone and task generality | Treat broader generality as untested. This ALOHA study supports only narrow claims about the two evaluated backbone configurations. |
 | R4: title and cost-benefit wording | Frame the result as an empirical ALOHA study of the tested frozen backbones. Remove “pay off,” “what it buys,” and similar wording because pretraining cost was not measured. |
+
+## RunPod update-matched follow-up
+
+This is a new follow-up protocol, separate from the six completed ALOHA policies above. It does not relabel the existing 7,000-update ALOHA policies as reproductions of the paper's 53,760-update training budget.
+
+### Scope and matrix
+
+- Compare the two frozen backbones, GR00T N1.7 and Qwen3-VL-2B, on ALOHA transfer-cube and LIBERO-Goal with **two cameras only**. There is no one-camera LIBERO arm. The one-camera setup has been identified as invalid for this study; it must not be pooled into the new evidence or used to support a camera-count conclusion.
+- Train three independent policy seeds per backbone/task cell: 2 backbones × 2 tasks × 3 seeds = **12 core policies**. The six existing ALOHA policies do not replace these runs because they stopped at 7,000 updates and used a different training configuration.
+- Keep Cosmos-Reason2-2B on ALOHA as a separate reviewer-requested extension, not part of the 12-policy core. If included, train three seeds and report it as an intermediate checkpoint in the same model lineage; it does not establish generalization across unrelated pretraining lineages.
+- Removing one-camera LIBERO means this follow-up cannot reproduce or retain a one-camera-versus-two-camera claim. The manuscript must state that the invalid one-camera condition was excluded and narrow camera-related conclusions accordingly.
+
+### Training protocol and checkpointing
+
+- Count **optimizer updates** as calls to `optimizer.step()`, not epochs, loader batches, or accumulated microbatches. Set the core training horizon to **53,760 updates per policy**. Use effective batch size 128 to match the paper's stated batch size.
+- Continue using the requested Hugging Face scheduler implementation with the full 53,760-update horizon and a predeclared warmup fraction. If the current 10% warmup is retained, that is 5,376 updates. Because the submitted paper used OneCycle, this is update-matched but not scheduler-identical; report that distinction rather than calling it an exact recipe reproduction. Do not let validation patience stop these fixed-horizon runs early.
+- The launched protocol locks the training/validation episode split, model revisions, data fingerprints, seeds, batch size, learning-rate schedule, and probe steps in `configs/runpod_update_matched_study.json` and each `locked_study.json`. Reuse a cache only when its recorded provenance matches the model, input, camera, and data configuration.
+- The locked update-matched mapping is ALOHA updates 26,880 and 53,760, and LIBERO updates 13,440, 26,880, 40,320, and 53,760. These correspond to ALOHA epochs 192/384 and LIBERO epochs 30/60/90/120 under the active loader geometry. The manuscript's historical epoch numbers are not the same schedule; keep that distinction explicit and do not change the locked probes while workers are running.
+- Save full resumable state (policy head, optimizer, scheduler, RNG, sampler state, and `global_step`) every 2,000 updates, retaining the latest two recovery states per run. Save a lightweight policy-weight snapshot at every task-specific probe and at the final update. Never select a checkpoint using closed-loop test results.
+- Write structured loss records keyed by optimizer update. Record averaged training loss, episode-disjoint validation loss, learning rate, and—if available—gradient norm at least every 1,000 updates and at every probe. Save raw records and plot per-seed curves plus mean and spread across the three training seeds.
+
+### Evaluation and offline-metric analysis
+
+- Evaluate all core policies on matched, predeclared starts. At interim probes use 50 ALOHA starts and 100 LIBERO starts (10 tasks × 10); at the final update use 200 ALOHA starts and all 50 standard initial states for each of the 10 LIBERO-Goal tasks (500). Reuse the same probe and final cohorts across both backbones and all training seeds. Record per-episode outcomes so paired analyses can be recomputed.
+- The 12-policy core requires 6,300 closed-loop episodes: 4,200 final episodes plus 2,100 interim-probe episodes. The optional three-seed Cosmos ALOHA extension adds 750 episodes under the same probe/final counts.
+- Align each probe's training loss and validation loss with its closed-loop success. Plot the loss trajectories and corresponding closed-loop success at the same optimizer updates. Test whether loss consistently ranks backbones and independent policies within each task, treating checkpoints as repeated observations within a policy. An inconsistent association supports a task-specific finding that these losses were uninformative for these tested decisions; it does not show that offline metrics are universally uninformative.
+- Treat checkpoint observations as repeated measurements within a trained policy, not independent training runs. Report policy-level means and sample SD across three seeds, paired rollout comparisons on matched starts, and uncertainty clustered by training seed. State that this is task- and backbone-specific evidence; it cannot establish that offline loss is universally uninformative.
+- Report the gripper-opening pattern only if it is present in the new recorded traces, and describe it as an observed failure pattern rather than a proven cause.
+
+### Storage, cost, and launch gates
+
+- The two workers write to the mounted RunPod Global Volume at `/workspace-global/action-omni/study_v1/`; they sync run-root files about once per minute. The very large active feature caches remain on Pod-local storage. Keep the Pods and volume until all required caches, checkpoints, logs, and final reports are preserved. No laptop-to-Pod file transfer is part of this workflow.
+- At the latest observation, cache throughput was far below the scripts' initial estimate: roughly 44 seconds per ALOHA batch and 80–90 seconds per LIBERO batch. Re-estimate timing and credit from current logs and the RunPod dashboard before making later deployment decisions; early-batch extrapolations can change.
+- Each Pod runs a single dataset worker. When both report `worker_complete`, a teammate still needs to combine the suffixed ALOHA/LIBERO run folders and run the paired and loss analyses; the separate workers do not emit the cross-dataset summary automatically. Follow the [team continuity guide](docs/team_continuity_guide.md).
+- The final report must separate the completed ALOHA study, the update-matched follow-up, and any future Cosmos extension. Cosmos is not part of the current locked run. Never pool results from these protocols as if they shared a training recipe.
+
+### Reviewer mapping
+
+| Change | Reviewer feedback addressed | Limit |
+|---|---|---|
+| Three independent seeds for each of four core cells; matched rollout starts and policy-level summaries | R1 paired ALOHA analysis; R2 independent training variance and mean ± SD | Three seeds remain a small sample. |
+| Two-camera LIBERO only and removal of the invalid one-camera comparison | R1/R4 scope and camera-claim precision | The camera-count effect is no longer tested. |
+| Training/validation loss curves aligned with closed-loop probe outcomes | R2 direct answer on offline metrics; preserves the paper's offline-versus-closed-loop contribution | Supports only task- and backbone-specific conclusions. |
+| Optional Cosmos ALOHA extension | R2 intermediate-lineage checkpoint; partial response to R3 model breadth | Does not test a separate pretraining lineage. |

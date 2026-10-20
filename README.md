@@ -1,6 +1,6 @@
 # VLA anatomy — which components decide closed-loop success
 
-> **Camera-ready revision in progress (18 October 2026):** the opt-in episode-holdout implementation and editable LaTeX draft are described in [camera-ready workflow](docs/CAMERA_READY.md), [plan.md](plan.md), and [manuscript/README.md](manuscript/README.md). Validation evidence and remaining gates are in [validation record](docs/camera_ready_validation.md). One full ALOHA GR00T seed is authorized; use the [single experiment command](scripts/README.md#one-full-experiment). The remaining training matrix and performance rollouts are deferred. Numerical results below describe the historical study, not completed episode-holdout replications.
+> **Team handoff (20 October 2026):** the historical results below are separate from the update-matched follow-up, which is running on two RunPod Pods. At the latest check both workers were still precomputing features; policy training had not started. See the [team continuity guide](docs/team_continuity_guide.md) for current paths, live monitoring, recovery rules, and the final analysis steps. Do not relaunch workers that are already running.
 
 For repository navigation, setup, tests, and the document migration map, see the
 [project guide](docs/README.md). Source packages remain directly importable from

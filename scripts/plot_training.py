@@ -14,25 +14,27 @@ def plot(history: Path, output: Path) -> None:
     rows = [json.loads(line) for line in history.read_text(encoding="utf-8").splitlines() if line.strip()]
     if not rows:
         return
-    epochs = [row["epoch"] for row in rows]
+    steps = [row.get("global_step") for row in rows]
+    x = steps if all(isinstance(value, int) for value in steps) else [row["epoch"] for row in rows]
+    x_label = "Optimizer update" if all(isinstance(value, int) for value in steps) else "Epoch"
     train = [row["train_loss"] for row in rows]
     valid = [row["validation_loss"] for row in rows]
     best = min(range(len(valid)), key=valid.__getitem__)
 
     fig, ax = plt.subplots(figsize=(8, 4.5), constrained_layout=True)
-    ax.plot(epochs, train, label="Train", linewidth=1.5)
-    ax.plot(epochs, valid, label="Validation", linewidth=1.8)
-    ax.scatter([epochs[best]], [valid[best]], color="tab:orange", zorder=3,
-               label=f"Best validation: epoch {epochs[best]}")
+    ax.plot(x, train, label="Train", linewidth=1.5)
+    ax.plot(x, valid, label="Validation", linewidth=1.8)
+    ax.scatter([x[best]], [valid[best]], color="tab:orange", zorder=3,
+               label=f"Best validation: {x_label.lower()} {x[best]}")
     manifest = history.with_name("run_manifest.json")
     metadata = json.loads(manifest.read_text(encoding="utf-8")) if manifest.exists() else {}
     title = f"{metadata.get('dataset', 'Policy').upper()} {metadata.get('config', {}).get('vlm_backbone', '')} training loss"
-    ax.set(title=title, xlabel="Epoch", ylabel="Loss")
+    ax.set(title=title, xlabel=x_label, ylabel="Loss")
     ax.grid(True, alpha=0.25)
     ax.legend()
     fig.savefig(output, dpi=160)
     plt.close(fig)
-    print(f"Updated {output} through epoch {epochs[-1]}; best validation epoch {epochs[best]}: {valid[best]:.5f}", flush=True)
+    print(f"Updated {output} through {x_label.lower()} {x[-1]}; best validation {x_label.lower()} {x[best]}: {valid[best]:.5f}", flush=True)
 
 
 def main() -> None:

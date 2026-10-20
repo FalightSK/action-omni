@@ -1,0 +1,67 @@
+{
+  "schema": 1,
+  "name": "runpod_update_matched_v1",
+  "purpose": "Update-matched replication of the submitted GR00T N1.7 versus Qwen3-VL-2B comparisons, with two-view LIBERO and loss-trajectory analysis",
+  "training_seeds": [3, 4, 5],
+  "optimizer_updates": 53760,
+  "effective_batch_size": 128,
+  "warmup_updates": 5376,
+  "minimum_learning_rate_ratio": 0.01,
+  "lr_schedule": "Hugging Face warmup plus cosine decay to 1% floor across the fixed update budget",
+  "checkpoint_every_updates": 2000,
+  "checkpoint_retention": 2,
+  "loss_log_max_interval_updates": 1000,
+  "checkpoint_rule": "fixed_update_endpoint",
+  "backbones": {
+    "groot": "exp05",
+    "qwen3vl": "exp06"
+  },
+  "source_revisions": {
+    "groot": {
+      "repo_id": "nvidia/GR00T-N1.7-3B",
+      "revision": "2fc962b973bccdd5d8ce4f67cc63b264d6886495"
+    },
+    "groot_tokenizer": {
+      "repo_id": "nvidia/Cosmos-Reason2-2B",
+      "revision": "9ce19a195e423419c349abfc86fd07178b230561"
+    },
+    "qwen3vl": {
+      "repo_id": "Qwen/Qwen3-VL-2B-Instruct",
+      "revision": "89644892e4d85e24eaac8bacfd4f463576704203"
+    },
+    "aloha_dataset": {
+      "repo_id": "lerobot/aloha_sim_transfer_cube_human",
+      "revision": "6a43d500f101255823a9d2b9dc244eeb01a2cd31"
+    },
+    "libero_dataset": {
+      "repo_id": "yifengzhu-hf/LIBERO-datasets",
+      "revision": "f13aa24a3da8c43c7225569f28c562979fa0e35a"
+    }
+  },
+  "datasets": {
+    "aloha": {
+      "split_manifest": "asset/protocols/aloha/97fa699cb307366377cec2eb0f29795d967710f9ffe0fea9d1e1c50108b8d537.json",
+      "steps_per_epoch": 140,
+      "epochs": 384,
+      "probe_updates": [26880],
+      "probe_epochs": [192],
+      "probe_episodes": 50,
+      "probe_seed_offset": 20000,
+      "final_episodes": 200,
+      "final_seed_offset": 10000,
+      "render_samples": 0
+    },
+    "libero": {
+      "split_manifest": "asset/protocols/libero/4d1d6267e4270ac86caf491ea9b5fb630eb0e3a8a728822f96e94be9b3e3b0ad.json",
+      "camera_views": ["agentview", "robot0_eye_in_hand"],
+      "steps_per_epoch": 448,
+      "epochs": 120,
+      "probe_updates": [13440, 26880, 40320],
+      "probe_epochs": [30, 60, 90],
+      "probe_episodes_per_task": 10,
+      "final_episodes_per_task": 50,
+      "tasks": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+      "condition": "canonical"
+    }
+  }
+}

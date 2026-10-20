@@ -218,6 +218,7 @@ def main() -> int:
                     "cache_id": checkpoint.get("cache_id"),
                     "checkpoint_sha256": file_digest(ckpt),
                     "checkpoint_epoch": checkpoint.get("epoch"),
+                    "optimizer_step": checkpoint.get("optimizer_step", checkpoint.get("global_step")),
                     "torch_version": torch.__version__,
                     "deterministic_inference": torch.are_deterministic_algorithms_enabled(),
                     "cublas_workspace_config": os.environ.get("CUBLAS_WORKSPACE_CONFIG"),

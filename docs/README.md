@@ -32,6 +32,11 @@ The root `plan.md` remains the active camera-ready plan. The editor's
 `manuscript/main.tex` path is unchanged. Historical assets are retained; new
 experiments use the execution layout described in [commands](../scripts/README.md).
 
+The live two-Pod RunPod deployment, durable storage paths, status commands,
+recovery rules, and post-run analysis steps are recorded in the
+[team continuity guide](team_continuity_guide.md). Check it before restarting or
+cleaning up any experiment process or artifact.
+
 ## Setup and checks
 
 Use the existing `vla` environment for model/data tools and synthetic checks.

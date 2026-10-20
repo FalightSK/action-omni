@@ -9,7 +9,8 @@ Shared runtime code belongs in `models/`, `data/`, `envs/`, and `configs/`.
 | Command | Purpose |
 |---|---|
 | `run_experiment.py` | Reuse/build a validated shared cache, then resume/train one seed. |
-| `run_study.py` | Lock and run the matched fixed-endpoint replication matrix; `--dry-run` prints commands only. |
+| `runpod_update_matched_study.py` | Execute the update-matched RunPod study; deploy one dataset worker per Pod. |
+| `run_study.py` | Earlier episode-holdout fixed-endpoint workflow; `--dry-run` prints commands only. |
 | `prepare_protocol.py` | Prepare episode splits and training-only statistics without a VLM. |
 | `precompute.py` | Cache frozen features (`--dataset --exp`). |
 | `train.py` | Train the adapter/action head on cached features. |
@@ -23,12 +24,16 @@ The [camera-ready workflow](../docs/CAMERA_READY.md) identifies the current opt-
 protocol and deferred experiment commands. Historical entrypoints do not
 constitute revised experiment results.
 
-The active prospective study uses `configs/camera_ready_study.json`: new seeds
-3–5, fixed final checkpoints (ALOHA 100 epochs, LIBERO 120), 200 ALOHA starts
-and 50 starts per LIBERO task. Start with
-`python scripts/run_study.py --dry-run --datasets aloha`, then remove `--dry-run`
-after the real-policy deterministic replay gate passes. See the workflow above
-for separate simulator environments and final paired reporting.
+The current update-matched RunPod workers are launched with
+`scripts/runpod_update_matched_study.py`, one dataset per Pod. For their locked
+plan, current run roots, live status commands, recovery procedure, and required
+cross-Pod final analysis, use the [team continuity guide](../docs/team_continuity_guide.md).
+
+The `configs/camera_ready_study.json` and `scripts/run_study.py` instructions
+below belong to the earlier episode-holdout workflow. Do not use them to launch
+the active update-matched RunPod matrix; its locked configuration and operating
+instructions are in `configs/runpod_update_matched_study.json` and the
+[team continuity guide](../docs/team_continuity_guide.md).
 
 ## One full experiment
 

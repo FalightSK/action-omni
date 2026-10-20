@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from contextlib import nullcontext
 from dataclasses import asdict
 import sys
@@ -77,6 +78,18 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--min-epochs", type=int, default=None,
                         help="Prevent early stopping before this epoch; patience still counts after warmup")
     parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--steps-per-epoch", type=int,
+                        help="Use this many full shuffled batches per epoch for an exact update budget")
+    parser.add_argument("--max-steps", type=int,
+                        help="Require epochs x steps-per-epoch to equal this optimizer-update budget")
+    parser.add_argument("--warmup-steps", type=int,
+                        help="Override the warmup update count")
+    parser.add_argument("--lr-decay-steps", type=int,
+                        help="Set the cosine-decay endpoint directly in optimizer updates")
+    parser.add_argument("--checkpoint-every-steps", type=int, default=2000,
+                        help="Retain two full-state recovery checkpoints at this interval")
+    parser.add_argument("--probe-epochs", type=int, nargs="*", default=[],
+                        help="Save inference-only snapshots at completed epochs")
     parser.add_argument("--fresh", action="store_true",
                         help="Ignore any last.pt and restart training from epoch 1.")
     parser.add_argument("--seed", type=int, help="Independent head-training seed")
@@ -108,7 +121,17 @@ def main(argv: list[str] | None = None) -> None:
     if args.epochs is not None: cfg.num_epochs = args.epochs
     if args.min_epochs is not None: cfg.min_epochs = args.min_epochs
     if args.batch_size is not None: cfg.batch_size = args.batch_size
-    if cfg.batch_size < 1 or cfg.num_epochs < 1 or (args.workers is not None and args.workers < 0):
+    if args.warmup_steps is not None: cfg.warmup_steps = args.warmup_steps
+    if args.lr_decay_steps is not None:
+        if args.lr_decay_steps < 1:
+            raise ValueError("lr-decay-steps must be positive")
+        cfg.lr_decay_epochs = None
+    if (cfg.batch_size < 1 or cfg.num_epochs < 1
+            or (args.steps_per_epoch is not None and args.steps_per_epoch < 1)
+            or (args.max_steps is not None and args.max_steps < 1)
+            or args.checkpoint_every_steps < 1
+            or any(epoch < 1 or epoch > cfg.num_epochs for epoch in args.probe_epochs)
+            or (args.workers is not None and args.workers < 0)):
         raise ValueError("Epochs/batch size must be positive; worker count must be nonnegative")
     if (cfg.early_stop_patience < 1 or cfg.warmup_steps < 0
             or not 0 < cfg.min_lr_ratio <= 1
@@ -173,9 +196,17 @@ def main(argv: list[str] | None = None) -> None:
     # Keep worker-base-seed draws separate from permutation draws. Recreating
     # workers on resume must not advance the saved shuffle stream.
     worker_generator = torch.Generator().manual_seed(args.seed) if args.seed is not None else None
+    if args.steps_per_epoch is not None and args.steps_per_epoch * cfg.batch_size > len(train_ds):
+        raise ValueError("steps-per-epoch requests more unique samples than the training split contains")
+    train_sampler = (RandomSampler(train_ds, generator=train_generator,
+                                   num_samples=args.steps_per_epoch * cfg.batch_size
+                                   if args.steps_per_epoch is not None else None)
+                     if train_generator is not None else
+                     RandomSampler(train_ds, num_samples=args.steps_per_epoch * cfg.batch_size)
+                     if args.steps_per_epoch is not None else None)
     train_loader = DataLoader(train_ds, batch_size=cfg.batch_size,
-                              shuffle=train_generator is None,
-                              sampler=RandomSampler(train_ds, generator=train_generator) if train_generator is not None else None,
+                              shuffle=train_generator is None and train_sampler is None,
+                              sampler=train_sampler,
                               drop_last=True, generator=worker_generator, **dl_kwargs)
     val_loader   = DataLoader(val_ds,   batch_size=cfg.batch_size,
                               shuffle=False, generator=val_generator, **dl_kwargs)
@@ -195,8 +226,15 @@ def main(argv: list[str] | None = None) -> None:
     ], weight_decay=cfg.weight_decay)
 
     total_steps = cfg.num_epochs * len(train_loader)
+    if args.max_steps is not None and total_steps != args.max_steps:
+        raise ValueError(f"Training budget mismatch: {cfg.num_epochs} epochs x {len(train_loader)} batches "
+                         f"= {total_steps} updates, requested {args.max_steps}")
+    if args.steps_per_epoch is not None and len(train_loader) != args.steps_per_epoch:
+        raise ValueError("steps-per-epoch did not produce the requested full-batch count")
     decay_epochs = min(cfg.num_epochs, cfg.lr_decay_epochs or cfg.num_epochs)
-    decay_steps = decay_epochs * len(train_loader)
+    decay_steps = args.lr_decay_steps or decay_epochs * len(train_loader)
+    if decay_steps > total_steps:
+        raise ValueError("Learning-rate decay endpoint cannot exceed the fixed training budget")
     if decay_steps <= cfg.warmup_steps + 1:
         raise ValueError("LR decay horizon needs more steps than warmup_steps + 1")
     scheduler = get_cosine_with_min_lr_schedule_with_warmup(
@@ -223,6 +261,10 @@ def main(argv: list[str] | None = None) -> None:
                 "encoder_provenance": getattr(full_ds, "encoder_provenance", None),
                 "lr_schedule": "warmup_cosine_min_lr", "lr_schedule_steps": decay_steps,
                 "lr_decay_epochs": decay_epochs, "max_training_steps": total_steps,
+                "training_mode": "update_matched" if args.max_steps is not None else "epoch",
+                "steps_per_epoch": len(train_loader),
+                "checkpoint_every_steps": args.checkpoint_every_steps,
+                "probe_epochs": args.probe_epochs,
                 "early_stopping": "after_warmup", "early_stop_start_step": cfg.warmup_steps,
                 "early_stop_start_epoch": early_stop_start_epoch}
     if protocol and args.fresh and (ckpt_dir / "last.pt").exists():
@@ -234,6 +276,7 @@ def main(argv: list[str] | None = None) -> None:
     # stopped instead of losing all progress. Resume requires the SAME batch size
     # (the schedule length is fixed at construction).
     last_path = ckpt_dir / "last.pt"
+    next_recovery_step = args.checkpoint_every_steps
     if last_path.exists() and not args.fresh:
         ck = torch.load(last_path, map_location=device, weights_only=False)
         if (ck.get("lr_schedule") != metadata["lr_schedule"]
@@ -241,6 +284,11 @@ def main(argv: list[str] | None = None) -> None:
                 or ck.get("max_training_steps") != total_steps
                 or ck["cfg"].min_lr_ratio != cfg.min_lr_ratio):
             raise ValueError("Resume LR schedule mismatch; use a new output directory")
+        if (ck.get("training_mode", "epoch") != metadata["training_mode"]
+                or ck.get("steps_per_epoch", len(train_loader)) != len(train_loader)
+                or ck.get("checkpoint_every_steps", args.checkpoint_every_steps) != args.checkpoint_every_steps
+                or ck.get("probe_epochs", args.probe_epochs) != args.probe_epochs):
+            raise ValueError("Resume update/checkpoint plan mismatch; use a new output directory")
         if (ck.get("early_stopping") != metadata["early_stopping"]
                 or ck.get("early_stop_start_step") != cfg.warmup_steps):
             raise ValueError("Resume stopping rule mismatch; use a new output directory")
@@ -259,6 +307,9 @@ def main(argv: list[str] | None = None) -> None:
             start_epoch   = ck["epoch"] + 1
             best_val_loss = ck.get("best_val_loss", float("inf"))
             global_step   = ck.get("global_step", 0)
+            next_recovery_step = ck.get(
+                "next_recovery_step",
+                (global_step // args.checkpoint_every_steps + 1) * args.checkpoint_every_steps)
             no_improve    = ck.get("no_improve", 0)
             if args.seed is not None:
                 if not all(k in ck for k in ("rng_state", "train_generator", "val_generator")):
@@ -280,6 +331,9 @@ def main(argv: list[str] | None = None) -> None:
             "trainable_parameters": n_total, "torch_version": torch.__version__,
             "lr_schedule": metadata["lr_schedule"], "lr_schedule_steps": decay_steps,
             "lr_decay_epochs": decay_epochs, "max_training_steps": total_steps,
+            "training_mode": metadata["training_mode"], "steps_per_epoch": len(train_loader),
+            "checkpoint_every_steps": args.checkpoint_every_steps,
+            "probe_epochs": args.probe_epochs,
             "early_stopping": metadata["early_stopping"],
             "early_stop_start_step": cfg.warmup_steps,
             "early_stop_start_epoch": early_stop_start_epoch,
@@ -290,6 +344,7 @@ def main(argv: list[str] | None = None) -> None:
     for epoch in range(start_epoch, stop_epoch + 1):
         model.train()
         ep_loss = 0.0
+        grad_norm_sum = 0.0
         t0 = time.time()
 
         for batch in train_loader:
@@ -303,7 +358,7 @@ def main(argv: list[str] | None = None) -> None:
             optim.zero_grad(set_to_none=True)   # frees grad memory rather than zeroing
             loss = model(embed, state, actions, img_mask)
             loss.backward()
-            nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+            grad_norm_sum += float(nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip))
             optim.step()
             # Hugging Face cosine would rebound beyond its configured endpoint.
             if global_step < decay_steps:
@@ -324,6 +379,7 @@ def main(argv: list[str] | None = None) -> None:
                 val_loss += model(embed, state, actions, img_mask).item() * len(state)
 
         avg_train = ep_loss / (len(train_loader) * cfg.batch_size)
+        avg_grad_norm = grad_norm_sum / len(train_loader)
         avg_val   = val_loss / len(val_ds)
         if not (torch.isfinite(torch.tensor(avg_train)) and torch.isfinite(torch.tensor(avg_val))):
             raise ValueError("Nonfinite training/validation loss; checkpoint not selected")
@@ -343,24 +399,33 @@ def main(argv: list[str] | None = None) -> None:
 
         if improved:
             best_val_loss = avg_val
-            torch.save({**metadata, "epoch": epoch, "state_dict": model.state_dict(),
+            torch.save({**metadata, "epoch": epoch, "global_step": global_step,
+                        "optimizer_step": global_step, "state_dict": model.state_dict(),
                         "val_loss": avg_val},
                        ckpt_dir / "best.pt")
-        # Full-state checkpoint every epoch for crash-safe resume. Write to a temp
-        # file then atomically replace, so a crash mid-write can't corrupt last.pt.
+        # Keep the previous interval recovery point while last.pt remains a
+        # finer-grained epoch-boundary recovery point.
+        if global_step >= next_recovery_step and last_path.exists():
+            previous_tmp = ckpt_dir / "previous.pt.tmp"
+            shutil.copy2(last_path, previous_tmp)
+            previous_tmp.replace(ckpt_dir / "previous.pt")
+            while next_recovery_step <= global_step:
+                next_recovery_step += args.checkpoint_every_steps
         tmp = ckpt_dir / "last.pt.tmp"
         torch.save({**metadata, "epoch": epoch, "state_dict": model.state_dict(),
                     "optim": optim.state_dict(), "scheduler": scheduler.state_dict(),
                     "best_val_loss": best_val_loss, "global_step": global_step,
+                    "next_recovery_step": next_recovery_step,
                     "no_improve": no_improve, "batch_size": cfg.batch_size,
                     "val_loss": avg_val, "cfg": cfg,
                     "rng_state": rng_state(),
                     "train_generator": train_generator.get_state() if train_generator is not None else None,
                     "val_generator": val_generator.get_state() if val_generator is not None else None}, tmp)
-        tmp.replace(ckpt_dir / "last.pt")
+        tmp.replace(last_path)
         with (Path(cfg.output_dir) / "history.jsonl").open("a", encoding="utf-8") as history:
             history.write(json.dumps({"epoch": epoch, "global_step": global_step,
                                       "train_loss": avg_train, "validation_loss": avg_val,
+                                      "gradient_norm": avg_grad_norm,
                                       "learning_rate": cur_lr, "no_improve": no_improve,
                                       "phase": phase,
                                       "seconds": elapsed}) + "\n")
@@ -369,19 +434,27 @@ def main(argv: list[str] | None = None) -> None:
             print(f"\n[Early stop] No improvement for {cfg.early_stop_patience} epochs.")
             break
 
-        if epoch % cfg.save_every == 0:
-            torch.save({**metadata, "epoch": epoch, "state_dict": model.state_dict(),
+        if epoch in args.probe_epochs:
+            torch.save({**metadata, "epoch": epoch, "global_step": global_step,
+                        "optimizer_step": global_step, "state_dict": model.state_dict(),
                         "val_loss": avg_val},
-                       ckpt_dir / f"epoch_{epoch:04d}.pt")
+                       ckpt_dir / f"probe_step_{global_step:08d}.pt")
+        elif epoch % cfg.save_every == 0:
+            torch.save({**metadata, "epoch": epoch, "global_step": global_step,
+                        "optimizer_step": global_step, "state_dict": model.state_dict(),
+                        "val_loss": avg_val}, ckpt_dir / f"epoch_{epoch:04d}.pt")
 
-    torch.save({**metadata, "epoch": completed_epoch, "state_dict": model.state_dict()},
+    torch.save({**metadata, "epoch": completed_epoch, "global_step": global_step,
+               "optimizer_step": global_step, "state_dict": model.state_dict()},
                ckpt_dir / "final.pt")
     if protocol:
         manifest_path = Path(cfg.output_dir) / "run_manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest.update(status="complete", completed_epoch=completed_epoch,
                         stop_reason="patience" if no_improve >= cfg.early_stop_patience else "max_epochs",
-                        optimizer_steps=global_step, best_validation_loss=best_val_loss)
+                        optimizer_steps=global_step, best_validation_loss=best_val_loss,
+                        training_seed=args.seed, training_mode=metadata["training_mode"],
+                        steps_per_epoch=len(train_loader))
         write_json(manifest_path, manifest)
 
     print(f"\nTraining complete. Best val loss: {best_val_loss:.4f}")
