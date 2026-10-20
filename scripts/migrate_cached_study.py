@@ -223,6 +223,33 @@ def select_verified_checkpoint(last_path: Path):
     return last_path, last_ck
 
 
+def ensure_local_v6_lock(durable_lock: Path, local_lock: Path,
+                         expected_contract: dict) -> None:
+    """Restore only a missing local lock from the exact verified durable contract."""
+    durable_lock, local_lock = Path(durable_lock), Path(local_lock)
+    message = "Existing v6 namespace lacks its exact current lock; refusing partial restart"
+    if not durable_lock.is_file():
+        raise FileExistsError(message)
+    durable_bytes = durable_lock.read_bytes()
+    if json.loads(durable_bytes) != expected_contract:
+        raise FileExistsError(message)
+    if local_lock.exists():
+        if json.loads(local_lock.read_bytes()) != expected_contract:
+            raise FileExistsError(message)
+        return
+
+    local_lock.parent.mkdir(parents=True, exist_ok=True)
+    temporary = local_lock.with_name(local_lock.name + ".restore.tmp")
+    try:
+        temporary.write_bytes(durable_bytes)
+        temporary.replace(local_lock)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    if json.loads(local_lock.read_bytes()) != expected_contract:
+        raise IOError("Restored local v6 study lock failed read-back verification")
+
+
 def cache_manifest_entries(path: Path, dataset: str, study_id: str,
                            plan_id: str, protocol_id: str,
                            experiments: set[str]) -> dict[str, dict]:
@@ -655,10 +682,7 @@ def main():
     if new_lock_exists or local_lock_exists:
         durable_lock = new_root / "locked_success_study.json"
         local_lock = run_root / "locked_success_study.json"
-        if (not durable_lock.is_file() or not local_lock.is_file()
-                or json.loads(durable_lock.read_text(encoding="utf-8")) != expected_contract
-                or json.loads(local_lock.read_text(encoding="utf-8")) != expected_contract):
-            raise FileExistsError("Existing v6 namespace lacks its exact current lock; refusing partial restart")
+        ensure_local_v6_lock(durable_lock, local_lock, expected_contract)
         for job in selected:
             relative = job["run"].relative_to(run_root)
             old_run = old_root / args.dataset / relative
@@ -674,7 +698,7 @@ def main():
                                                audit_path, parent_copy, controller)):
                 raise FileNotFoundError("v6 restart found incomplete continuation evidence")
             parent_path, parent = select_verified_checkpoint(old_ckpt)
-            current = torch.load(target_ckpt, map_location="cpu", weights_only=False)
+            current_path, current = select_verified_checkpoint(target_ckpt)
             old_job = next((x for x in old_contract["jobs"]
                             if x.get("dataset") == args.dataset
                             and x.get("experiment") == job["experiment"]
@@ -756,6 +780,16 @@ def main():
             if order_ctrl == order_ck:
                 equal(ctrl.get("success_stopping_state"), current.get("success_stopping_state"),
                       "v6 controller continuation")
+            selected_sha256 = sha(current_path)
+            print(json.dumps({"event": "v6_restart_checkpoint_selected",
+                              "dataset": args.dataset,
+                              "experiment": job["experiment"],
+                              "path": str(current_path),
+                              "sha256": selected_sha256,
+                              "epoch": int(current["epoch"]),
+                              "global_step": int(current["global_step"]),
+                              "recovery_revision": int(current.get("recovery_revision", -1))},
+                             sort_keys=True))
         print(json.dumps({"status": "already_continued", "dataset": args.dataset,
                           "new_study_id": args.new_study_id, "plan_id": plan_id}))
         return 0

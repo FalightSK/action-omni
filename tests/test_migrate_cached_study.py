@@ -16,11 +16,74 @@ except ModuleNotFoundError:
 
 from scripts.migrate_cached_study import (
     cache_prepare_report_identity, self_check_cache_prepare_report_identity,
+    ensure_local_v6_lock, select_verified_checkpoint,
     validate_cache_prepare_report, validate_training_source_delta,
 )
 
 
 class CachedMigrationGuardTests(unittest.TestCase):
+    def test_missing_local_lock_is_restored_from_exact_durable_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            durable = root / "cloud" / "locked_success_study.json"
+            local = root / "local" / "locked_success_study.json"
+            contract = {"plan_id": "plan", "dataset_role": "aloha",
+                        "jobs": [{"experiment": "exp05", "seed": 3}]}
+            durable_bytes = (json.dumps(contract, sort_keys=True, indent=2) + "\n").encode()
+            durable.parent.mkdir(parents=True)
+            durable.write_bytes(durable_bytes)
+
+            ensure_local_v6_lock(durable, local, contract)
+
+            self.assertEqual(local.read_bytes(), durable_bytes)
+
+    def test_mismatched_local_or_durable_lock_is_rejected_without_overwrite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            durable = root / "cloud" / "locked_success_study.json"
+            local = root / "local" / "locked_success_study.json"
+            contract = {"plan_id": "expected"}
+            other = {"plan_id": "different"}
+            durable.parent.mkdir(parents=True)
+            durable.write_text(json.dumps(contract), encoding="utf-8")
+            local.parent.mkdir(parents=True)
+            local.write_text(json.dumps(other), encoding="utf-8")
+            original_local = local.read_bytes()
+
+            with self.assertRaises(FileExistsError):
+                ensure_local_v6_lock(durable, local, contract)
+            self.assertEqual(local.read_bytes(), original_local)
+
+            local.unlink()
+            durable.write_text(json.dumps(other), encoding="utf-8")
+            with self.assertRaises(FileExistsError):
+                ensure_local_v6_lock(durable, local, contract)
+            self.assertFalse(local.exists())
+
+    def test_checkpoint_selector_uses_immutable_when_mutable_last_is_partial(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            last = root / "last.pt"
+            last.write_bytes(b"partial mutable checkpoint")
+            immutable_payload = b"verified immutable checkpoint"
+            immutable_sha = hashlib.sha256(immutable_payload).hexdigest()
+            immutable = root / f"recovery_e000080_r00000012_{immutable_sha}.pt"
+            immutable.write_bytes(immutable_payload)
+            checkpoint = {"epoch": 80, "global_step": 11200,
+                          "recovery_revision": 12}
+
+            def load(path, **kwargs):
+                if Path(path) == immutable:
+                    return checkpoint
+                raise OSError("simulated partial last.pt")
+
+            with patch("scripts.migrate_cached_study.torch.load", side_effect=load,
+                       create=True):
+                selected_path, selected_checkpoint = select_verified_checkpoint(last)
+
+            self.assertEqual(selected_path, immutable)
+            self.assertEqual(selected_checkpoint, checkpoint)
+
     def test_exact_reviewed_trainer_transition_is_allowed(self):
         hashes = [
             "68e74ec905b7c77c6998fa8d3bc5842aad5c881fc450255f1c8e7858848622a4",
