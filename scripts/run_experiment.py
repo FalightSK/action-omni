@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import traceback
 import zipfile
 
@@ -25,6 +26,7 @@ from data.hdf5_embeddings import HDF5EmbeddingDataset
 from experiment_protocol import (apply_normalization, cache_config, digest,
                                  encoder_code_id, file_digest, load_protocol,
                                  run_signature, source_assets, write_json)
+from scripts.run_log import log_event
 
 
 def stamp():
@@ -60,6 +62,9 @@ def validate_cache(path, cfg, protocol, assets):
     import h5py
     import numpy as np
 
+    started = time.perf_counter()
+    log_event("cache_validation.started", cache=str(path), dataset=protocol["dataset"],
+              expected_samples=protocol["n_samples"])
     ds = HDF5EmbeddingDataset(path, expect_layers=cfg.vlm_extract_layers,
                               protocol=protocol, config=cfg)
     if len(ds) != protocol["n_samples"]:
@@ -85,7 +90,8 @@ def validate_cache(path, cfg, protocol, assets):
         if (not parity or sorted(set(parity["rows"])) != expected
                 or parity["max_absolute_difference"] != 0 or not parity["masks_equal"]):
             raise ValueError("Cache lacks passing first/last batch-one parity checks")
-        for start in range(0, n, 256):
+        blocks = (n + 255) // 256
+        for block_index, start in enumerate(range(0, n, 256), start=1):
             raw = f["embeddings"][start:start + 256]
             # BF16 exponent bits are all ones for both infinities and NaNs.
             if np.any((raw & 0x7F80) == 0x7F80):
@@ -93,6 +99,8 @@ def validate_cache(path, cfg, protocol, assets):
             masks = f["img_masks"][start:start + 256]
             if not np.isin(masks, [0, 1]).all() or not (masks.sum(axis=1) > 0).all():
                 raise ValueError("Invalid/empty cached image masks")
+            log_event("cache_validation.embedding_block", block=block_index, blocks=blocks,
+                      rows_checked=min(start + 256, n), total_rows=n)
     # ALOHA normalization/chunk boundaries can be checked without decoding video.
     boundaries = 0
     if protocol["dataset"] == "aloha":
@@ -111,26 +119,41 @@ def validate_cache(path, cfg, protocol, assets):
                         or not np.allclose(ds.states[row].numpy(), state, atol=1e-6, rtol=1e-6)):
                     raise ValueError(f"Raw demonstration/cache boundary mismatch at row {row}")
                 boundaries += 1
-    return {"status": "passed", "cache": str(path), "cache_id": ds.cache_id,
+    report = {"status": "passed", "cache": str(path), "cache_id": ds.cache_id,
             "protocol_id": protocol["protocol_id"], "frames": n,
             "validation_frames": int(ds.validation_mask.sum()),
             "all_values_finite": True, "batch_one_parity": parity,
             "boundary_rows_checked": boundaries}
+    log_event("cache_validation.complete", cache=str(path), samples=n,
+              boundary_rows_checked=boundaries,
+              elapsed_s=round(time.perf_counter() - started, 3))
+    return report
 
 
 def ensure_cache(cache, cfg, protocol, assets, encode):
     """Publish only fully validated files; never overwrite a finished cache."""
+    started = time.perf_counter()
+    log_event("cache.ensure_started", cache=str(cache), exists=cache.exists())
     cache.parent.mkdir(parents=True, exist_ok=True)
     with exclusive_run(cache.parent / ".encoding.lock"):
         if cache.exists():
-            return validate_cache(cache, cfg, protocol, assets), True
+            report = validate_cache(cache, cfg, protocol, assets)
+            log_event("cache.reused", cache=str(cache), elapsed_s=round(time.perf_counter() - started, 3))
+            return report, True
         partial = cache.with_suffix(".partial.h5")
         if partial.exists():
-            partial.rename(cache.with_name(f"interrupted_{stamp()}.h5"))
+            interrupted = cache.with_name(f"interrupted_{stamp()}.h5")
+            partial.rename(interrupted)
+            log_event("cache.interrupted_partial_preserved", old_path=str(partial),
+                      preserved_path=str(interrupted))
+        log_event("cache.encode_started", partial=str(partial))
         encode(partial)
+        log_event("cache.encode_complete", partial=str(partial), bytes=partial.stat().st_size)
         report = validate_cache(partial, cfg, protocol, assets)
         partial.rename(cache)
         report["cache"] = str(cache)
+        log_event("cache.published", cache=str(cache), bytes=cache.stat().st_size,
+                  elapsed_s=round(time.perf_counter() - started, 3))
         return report, False
 
 
@@ -247,4 +270,9 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseException as exc:
+        log_event("experiment.failed", level="ERROR", error_type=type(exc).__name__,
+                  error=str(exc))
+        raise

@@ -207,7 +207,8 @@ def main(argv=None):
         return
     if "libero" in args.datasets and (args.libero_python is None or not args.libero_python.is_file()):
         ap.error("Supply the LIBERO simulator environment with --libero-python")
-    code_paths = ["scripts/run_study.py", "scripts/run_experiment.py", "scripts/evaluate.py",
+    code_paths = ["scripts/run_study.py", "scripts/run_log.py", "scripts/prepare_protocol.py",
+                  "scripts/run_experiment.py", "scripts/evaluate.py",
                   "scripts/eval_libero.py", "scripts/analysis/paired_results.py", "scripts/plot_training.py", "scripts/train.py",
                   "experiment_protocol.py", "envs/aloha_env.py", "envs/libero_env.py"]
     contract = {"plan": plan, "plan_id": digest(plan),

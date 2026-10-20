@@ -83,6 +83,10 @@ def paired_statistics(left, right, strata=None, resamples=20000, seed=20261018):
 
 def outcome_map(result):
     dataset = result["dataset"]
+    expected_kind = {"aloha": "gym_aloha_mujoco_state_v1",
+                     "libero": "libero_mujoco_state_after_init_and_settle_v1"}.get(dataset)
+    if expected_kind is None:
+        raise ValueError(f"Unsupported paired-evaluation dataset: {dataset!r}")
     records = result["results"] if dataset == "libero" else result["episodes"]
     mapped = {}
     for r in records:
@@ -94,7 +98,17 @@ def outcome_map(result):
         success = r["success"] if dataset == "libero" else r["is_success"]
         if not isinstance(success, bool):
             raise ValueError("Success values must be JSON booleans")
-        mapped[key] = (success, r["environment_seed"], r["policy_sampling_seed"])
+        state_sha = r.get("initial_state_sha256")
+        state_kind = r.get("initial_state_kind")
+        if not isinstance(state_sha, str) or len(state_sha) != 64 or any(
+                char not in "0123456789abcdef" for char in state_sha.lower()):
+            raise ValueError(f"Real simulator-state SHA-256 is missing/invalid for paired start {key}; "
+                             "legacy records without state fingerprints are ineligible")
+        if state_kind != expected_kind:
+            raise ValueError(f"Unexpected or missing real-state fingerprint kind for {key}: "
+                             f"{state_kind!r}; expected {expected_kind!r}")
+        mapped[key] = (success, r["environment_seed"], r["policy_sampling_seed"],
+                       state_sha.lower(), state_kind)
     if not mapped:
         raise ValueError("No canonical evaluation episodes")
     return mapped
@@ -104,11 +118,28 @@ def compare_records(left, right, vary="backbone", **kwargs):
     for key in ("dataset", "protocol_id", "training_seed"):
         if left.get(key) is None or left.get(key) != right.get(key):
             raise ValueError(f"Unmatched/missing {key}; legacy results are not eligible")
+    modes = [r.get("feature_mode", "cached") for r in (left, right)]
+    if modes[0] != modes[1] or modes[0] not in ("cached", "online"):
+        raise ValueError("Paired policies must use the same recognized feature mode")
     for r in (left, right):
-        if not all(r.get(k) for k in ("checkpoint_sha256", "run_signature", "cache_id")):
-            raise ValueError("Result lacks checkpoint/cache/run provenance")
+        if not all(r.get(k) for k in ("checkpoint_sha256", "run_signature")):
+            raise ValueError("Result lacks checkpoint/run provenance")
+        if modes[0] == "cached":
+            if not r.get("cache_id"):
+                raise ValueError("Cached-feature result lacks cache provenance")
+        else:
+            provenance = r.get("encoder_provenance") or {}
+            if not all(provenance.get(k) for k in (
+                    "encoder_code_id", "online_encoder_code_sha256", "source_assets")):
+                raise ValueError("Online-feature result lacks frozen-encoder/source-asset provenance")
+            if not isinstance(provenance["source_assets"], dict) or not provenance["source_assets"]:
+                raise ValueError("Online-feature result has an empty source-asset manifest")
     if left["checkpoint_sha256"] == right["checkpoint_sha256"]:
         raise ValueError("Cannot compare the same checkpoint with itself")
+    if modes[0] == "online" and (
+            left["encoder_provenance"]["online_encoder_code_sha256"]
+            != right["encoder_provenance"]["online_encoder_code_sha256"]):
+        raise ValueError("Online encoder implementations differ across paired policies")
     if vary not in ("backbone", "camera"):
         raise ValueError("Comparison must vary backbone or camera")
     allowed = {"output_dir", "embeddings_cache", "model_path", "device", "embed_batch_size"}
@@ -125,11 +156,13 @@ def compare_records(left, right, vary="backbone", **kwargs):
     keys = sorted(a)
     for key in keys:
         if a[key][1:] != b[key][1:] or a[key][2] is None:
-            raise ValueError(f"Unmatched environment/policy sampling seeds at {key}")
+            raise ValueError(f"Unmatched environment/policy seeds or real simulator-state hashes at {key}")
     out = paired_statistics([a[k][0] for k in keys], [b[k][0] for k in keys],
                             strata=[k[0] for k in keys], **kwargs)
     out.update(dataset=left["dataset"], training_seed=left["training_seed"],
                protocol_id=left["protocol_id"],
+               feature_mode=modes[0],
+               paired_start_identity="matching environment/policy seeds and MuJoCo initial-state SHA-256",
                left_checkpoint=left["checkpoint_sha256"], right_checkpoint=right["checkpoint_sha256"],
                left_arm=(left["configuration"].get("vlm_backbone"), left["configuration"].get("n_views", 1)),
                right_arm=(right["configuration"].get("vlm_backbone"), right["configuration"].get("n_views", 1)))

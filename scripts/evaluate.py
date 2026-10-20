@@ -316,6 +316,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  Wilson 95% CI     : [{ci_lo*100:.0f}%, {ci_hi*100:.0f}%]")
     print(f"{'═'*52}\n")
 
+    checkpoint_sha256 = file_digest(ckpt_path)
     summary = {
         "dataset":    args.dataset,
         "exp_id":     args.exp,
@@ -331,10 +332,13 @@ def main(argv: list[str] | None = None) -> None:
         "success_threshold": cfg.success_threshold,
         "episodes": results,
         "training_seed": training_seed,
+        "feature_mode": ckpt.get("feature_mode", "cached"),
+        "encoder_provenance": ckpt.get("encoder_provenance"),
         "protocol_id": protocol["protocol_id"] if protocol else None,
         "run_signature": ckpt.get("run_signature"),
         "cache_id": ckpt.get("cache_id"),
-        "checkpoint_sha256": file_digest(ckpt_path),
+        "checkpoint_sha256": checkpoint_sha256,
+        "policy_sha256": checkpoint_sha256,
         "checkpoint_epoch": ckpt.get("epoch"),
         "optimizer_step": ckpt.get("optimizer_step", ckpt.get("global_step")),
         "seed_offset": args.seed_offset,

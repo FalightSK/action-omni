@@ -114,8 +114,9 @@ def cache_config(cfg):
 
 def encoder_code_id():
     return digest({p: file_digest(ROOT / p) for p in (
-        "models/vla.py", "models/backbones.py",
-        "data/aloha/dataset.py", "data/libero/dataset.py", "scripts/precompute.py")})
+        "models/vla.py", "models/backbones.py", "models/vision_patch_projection.py",
+        "data/aloha/dataset.py", "data/libero/dataset.py", "data/libero/frames.py",
+        "data/hdf5_embeddings.py", "scripts/precompute.py")})
 
 
 def source_assets(cfg):

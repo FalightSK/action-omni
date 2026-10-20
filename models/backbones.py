@@ -611,6 +611,15 @@ def load_backbone(name: str, device: str = "cuda", dtype=torch.bfloat16) -> Back
         raise ValueError(f"unknown backbone: {name}")
 
     bb.model.to(device).eval()
+    if name in ("groot", "cosmos", "cosmos16", "qwen3vl"):
+        # Qwen3-VL's non-overlapping patch Conv3d is mathematically a single
+        # flattened projection. Install the guarded 4.57.6 equivalent before
+        # freezing; it does not alter parameters or checkpoint keys.
+        from models.vision_patch_projection import install_qwen3vl_patch_projection
+
+        patch_report = install_qwen3vl_patch_projection(bb.model, required=True)
+        print(f"    vision patch projection: linear ({patch_report.patched_modules} module(s), "
+              f"transformers={patch_report.transformers_version})")
     for p in bb.model.parameters():
         p.requires_grad_(False)
     # Resolved here, not lazily inside encode(), so a missing or wrong module

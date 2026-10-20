@@ -40,7 +40,6 @@ from torch.utils.data import DataLoader, Subset
 import numpy as np
 import pandas as pd
 import torch
-from tqdm import tqdm
 
 ROOT = Path(__file__).parents[1]
 sys.path.insert(0, str(ROOT))
@@ -48,6 +47,7 @@ sys.path.insert(0, str(ROOT))
 from configs.registry import get_config
 from models.vla import VLAModel
 from data.hdf5_embeddings import is_hdf5_path, HDF5EmbeddingWriter
+from scripts.run_log import log_event
 
 
 # ── Dataset loader factory ─────────────────────────────────────────────────────
@@ -127,6 +127,8 @@ def _recompute_actions_only(cfg, out_path: Path) -> None:
     new_actions = torch.zeros(N, H, D, dtype=torch.float32)
 
     print("  Re-building action chunks …")
+    started = time.perf_counter()
+    report_every = max(1, N // 20)
     for idx in range(N):
         row = df.iloc[idx]
         ep  = episode_ids[idx]
@@ -145,6 +147,12 @@ def _recompute_actions_only(cfg, out_path: Path) -> None:
                 if use_rel:
                     a = last_a - state_now
             new_actions[idx, k] = torch.from_numpy(norm(a))
+        if (idx + 1) % report_every == 0 or idx + 1 == N:
+            elapsed = time.perf_counter() - started
+            log_event("precompute.action_chunk_progress", completed=idx + 1, total=N,
+                      elapsed_s=round(elapsed, 3),
+                      samples_per_s=round((idx + 1) / max(elapsed, 1e-9), 2),
+                      eta_s=round((N - idx - 1) * elapsed / (idx + 1), 1))
 
     cache["actions"] = new_actions
     if cfg.state_dim > 2:
@@ -156,6 +164,9 @@ def _recompute_actions_only(cfg, out_path: Path) -> None:
     cache["n_samples"] = N
     torch.save(cache, out_path)
     print(f"  Saved updated cache → {out_path}")
+    log_event("precompute.action_chunks_complete", output=str(out_path), samples=N,
+              elapsed_s=round(time.perf_counter() - started, 3),
+              bytes=out_path.stat().st_size)
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -174,17 +185,27 @@ def main(argv: list[str] | None = None) -> None:
                         help="Rebuild action chunks without re-running VLM")
     parser.add_argument("--split-manifest", type=Path,
                         help="Opt in to the prepared episode-holdout protocol (full HDF5 only)")
+    parser.add_argument("--log-every-batches", type=int, default=10,
+                        help="Emit VLM encoding progress every N batches")
     args = parser.parse_args(argv)
+    if args.log_every_batches < 1:
+        parser.error("--log-every-batches must be positive")
 
     cfg = get_config(args.dataset, args.exp)
+    run_started = time.perf_counter()
     print(f"Dataset    : {args.dataset}  |  Exp: {args.exp}")
     print(f"Output dir : {cfg.output_dir}")
     device   = cfg.get_device()
     out_path = Path(args.output or cfg.embeddings_cache)
+    log_event("precompute.started", dataset=args.dataset, experiment=args.exp,
+              device=str(device), output=str(out_path), max_samples=args.max_samples,
+              split_manifest=str(args.split_manifest) if args.split_manifest else None)
     protocol = None
     if args.split_manifest:
         from experiment_protocol import (apply_normalization, load_protocol,
                                          file_digest)
+        protocol_started = time.perf_counter()
+        log_event("precompute.protocol_validation_started", manifest=str(args.split_manifest))
         protocol = load_protocol(args.split_manifest, args.dataset)
         if args.max_samples is not None or args.recompute_actions or not is_hdf5_path(out_path):
             raise ValueError("Protocol encoding requires full HDF5; no action-only rewrites/subsets")
@@ -194,10 +215,15 @@ def main(argv: list[str] | None = None) -> None:
             if file_digest(Path(cfg.dataset_root) / relative) != expected:
                 raise ValueError(f"Source data changed: {relative}")
         apply_normalization(cfg, protocol)
+        log_event("precompute.protocol_validation_complete", protocol_id=protocol["protocol_id"],
+                  source_files=len(protocol["source_files"]),
+                  elapsed_s=round(time.perf_counter() - protocol_started, 3))
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     if args.recompute_actions:
         _recompute_actions_only(cfg, out_path)
+        log_event("precompute.complete", mode="actions_only",
+                  elapsed_s=round(time.perf_counter() - run_started, 3))
         return
 
     n_layers = cfg.n_vlm_layers
@@ -207,6 +233,8 @@ def main(argv: list[str] | None = None) -> None:
 
     # ── Build dataset ──────────────────────────────────────────────────────
     print("\n[1/3] Loading dataset …")
+    data_started = time.perf_counter()
+    log_event("data_collection.started", dataset=args.dataset, root=str(cfg.dataset_root))
     full_dataset = _get_raw_dataset(args.dataset, cfg)
     if protocol:
         from experiment_protocol import protocol_arrays
@@ -222,14 +250,25 @@ def main(argv: list[str] | None = None) -> None:
     else:
         dataset = full_dataset
         is_full = True
+    log_event("data_collection.complete", dataset=args.dataset, samples=len(dataset),
+              full_dataset=is_full,
+              episodes=int(len(np.unique(full_dataset.episode_ids)))
+              if hasattr(full_dataset, "episode_ids") else None,
+              elapsed_s=round(time.perf_counter() - data_started, 3))
 
     loader = DataLoader(dataset, batch_size=cfg.embed_batch_size,
                         shuffle=False, num_workers=0, collate_fn=_custom_collate)
+    log_event("data_loader.ready", batches=len(loader), batch_size=cfg.embed_batch_size, workers=0)
 
     # ── Load VLM ───────────────────────────────────────────────────────────
     print("\n[2/3] Loading VLM …")
+    model_started = time.perf_counter()
+    log_event("backbone_load.started", backbone=cfg.vlm_backbone)
     model = VLAModel(cfg)
     model.vlm.to(device).eval()
+    log_event("backbone_load.complete", backbone=cfg.vlm_backbone,
+              elapsed_s=round(time.perf_counter() - model_started, 3),
+              parameters=sum(p.numel() for p in model.vlm.parameters()))
 
     N        = len(dataset)
     H_size   = cfg.vlm_hidden_size
@@ -290,13 +329,23 @@ def main(argv: list[str] | None = None) -> None:
 
     ptr = 0
     batch_one_parity = {"rows": [], "max_absolute_difference": 0.0, "masks_equal": True}
-    t0  = time.time()
+    t0 = time.perf_counter()
+    last_batch_end = t0
+    total_batches = len(loader)
+    log_event("feature_encoding.started", samples=N, batches=total_batches,
+              batch_size=cfg.embed_batch_size, sink=sink, device=str(device))
     with torch.no_grad():
-        for batch in tqdm(loader, desc="VLM encoding", unit="batch"):
+        for batch_index, batch in enumerate(loader, start=1):
+            batch_started = time.perf_counter()
+            data_wait_s = batch_started - last_batch_end
             B = len(batch["images"])
+            encode_started = time.perf_counter()
             vlm_inputs = model.build_vlm_inputs(
                 images=batch["images"], task_texts=batch["task_texts"], device=device)
             tokens, img_mask = model.encode_vlm(vlm_inputs)
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            encode_s = time.perf_counter() - encode_started
 
             if protocol and (ptr == 0 or ptr + B == N):
                 # Compare actual batched features with the live batch-one path.
@@ -319,6 +368,7 @@ def main(argv: list[str] | None = None) -> None:
                 actual_S = tokens.shape[1]
                 sl = min(actual_S, S)
 
+            write_started = time.perf_counter()
             if use_hdf5:
                 # Build a (B, [L,] S, H) bf16 buffer padded/truncated to S, plus mask.
                 if n_layers > 1:
@@ -339,8 +389,19 @@ def main(argv: list[str] | None = None) -> None:
                 all_states [ptr:ptr+B]     = batch["states"]
                 all_actions[ptr:ptr+B]     = batch["actions"]
             ptr += B
+            batch_end = time.perf_counter()
+            elapsed = batch_end - t0
+            if (batch_index == 1 or batch_index % args.log_every_batches == 0
+                    or batch_index == total_batches):
+                log_event("feature_encoding.batch_progress", batch=batch_index, batches=total_batches,
+                          completed_samples=ptr, total_samples=N,
+                          data_wait_s=round(data_wait_s, 3), encoder_s=round(encode_s, 3),
+                          cache_write_s=round(batch_end - write_started, 3),
+                          elapsed_s=round(elapsed, 3), samples_per_s=round(ptr / max(elapsed, 1e-9), 2),
+                          eta_s=round((N - ptr) * elapsed / max(ptr, 1), 1))
+            last_batch_end = time.perf_counter()
 
-    elapsed = time.time() - t0
+    elapsed = time.perf_counter() - t0
     print(f"\n   Finished in {elapsed/60:.1f} min  ({N/elapsed:.1f} samples/sec)")
 
     # ── Save ───────────────────────────────────────────────────────────────
@@ -374,10 +435,19 @@ def main(argv: list[str] | None = None) -> None:
         mb = out_path.stat().st_size / 1e6
         print(f"   Saved → {out_path}  ({mb:.0f} MB)")
 
+    log_event("precompute.complete", dataset=args.dataset, experiment=args.exp,
+              samples=N, cache=str(out_path), cache_mb=round(mb, 2),
+              elapsed_s=round(time.perf_counter() - run_started, 3),
+              samples_per_s=round(N / max(elapsed, 1e-9), 2), full_dataset=is_full)
+
     if is_full:
         print(f"\n   Full dataset encoded. Run:")
         print(f"   python scripts/train.py --dataset {args.dataset} --exp {args.exp}")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BaseException as exc:
+        log_event("precompute.failed", level="ERROR", error_type=type(exc).__name__, error=str(exc))
+        raise

@@ -39,6 +39,20 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
+def initial_state_indices(offset: int, episodes: int, total_states: int) -> range:
+    """Select a contiguous fixed-start cohort without wrapping or reuse."""
+    if offset < 0:
+        raise ValueError("initial-state offset must be nonnegative")
+    if episodes < 1:
+        raise ValueError("Episode count must be positive")
+    end = offset + episodes
+    if end > total_states:
+        raise ValueError(
+            f"Initial-state cohort [{offset}, {end}) exceeds the "
+            f"{total_states} available fixed starts; refusing to wrap or reuse states")
+    return range(offset, end)
+
+
 def load_policy(cfg, ckpt_path: Path, device: str):
     """Rebuild the VLM + trained head from a checkpoint."""
     from models.vla import VLAModel
@@ -82,6 +96,9 @@ def main() -> int:
                     help="record this many episodes per (task, condition)")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--initial-state-offset", type=int, default=0,
+                    help="First LIBERO fixed start to use; episodes select a contiguous "
+                         "cohort and may not wrap (dev: 0, final: 10)")
     ap.add_argument("--output-dir", type=Path,
                     help="Seed-specific run directory (or supply an absolute --checkpoint)")
     a = ap.parse_args()
@@ -110,6 +127,8 @@ def main() -> int:
     dst = Path(a.output) if a.output else ckpt.parent.parent / "eval_libero.json"
     if a.episodes < 1:
         raise ValueError("Episode count must be positive")
+    if a.initial_state_offset < 0:
+        raise ValueError("Initial-state offset must be nonnegative")
     if protocol and dst.exists():
         raise FileExistsError(f"Refusing to overwrite evaluation: {dst}")
 
@@ -151,27 +170,31 @@ def main() -> int:
         # uses state i, so every condition is compared on identical starts —
         # otherwise a swapped-instruction difference could be scene variation.
         inits = load_init_states(task)
-        if a.episodes > len(inits):
-            raise ValueError("Requested more unique starts than available; refusing duplicate initial states")
+        initial_state_ids = initial_state_indices(
+            a.initial_state_offset, a.episodes, len(inits))
         env = make_env(bddl, cfg)
         try:
             for cond in a.conditions:
                 instr = conds[cond]
                 wins = 0
-                for ep in range(a.episodes):
+                for ep, initial_state_id in enumerate(initial_state_ids):
                     record = ep < a.videos
                     policy_seed = None
                     if protocol:
-                        policy_seed = sampling_seed("libero", training_seed, ti, ep)
+                        policy_seed = sampling_seed(
+                            "libero", training_seed, ti, initial_state_id)
                         seed_everything(policy_seed)
                     r = run_episode(env, agent, cfg, instr,
-                                    seed=a.seed + ep, record=record,
-                                    init_state=inits[ep % len(inits)])
+                                    seed=a.seed + initial_state_id, record=record,
+                                    init_state=inits[initial_state_id])
                     wins += int(r["success"])
                     frames = r.pop("frames")
                     r.update(task=ti, task_language=task.language, condition=cond,
-                             instruction=instr, episode=ep, initial_state_id=ep,
-                             environment_seed=a.seed + ep, policy_sampling_seed=policy_seed,
+                             instruction=instr, episode=ep,
+                             initial_state_id=initial_state_id,
+                             initial_state_offset=a.initial_state_offset,
+                             environment_seed=a.seed + initial_state_id,
+                             policy_sampling_seed=policy_seed,
                              termination_reason="success" if r["success"] else "horizon")
                     results.append(r)
                     if record and frames:
@@ -209,14 +232,21 @@ def main() -> int:
         delta = "--" if cond == a.conditions[0] else f"{sr - base:+.1%}"
         print(f"{cond:<12}{sr:>8.1%}{delta:>14}{moved:>8.0%}{grip:>14.1f}")
 
+    checkpoint_sha256 = file_digest(ckpt)
     write_json(dst, {"dataset": "libero", "exp_id": a.exp,
                     "checkpoint": str(ckpt), "episodes": a.episodes,
+                    "initial_state_offset": a.initial_state_offset,
+                    "initial_state_ids": list(range(a.initial_state_offset,
+                                                     a.initial_state_offset + a.episodes)),
                     "conditions": a.conditions, "results": results,
                     "training_seed": training_seed,
+                    "feature_mode": checkpoint.get("feature_mode", "cached"),
+                    "encoder_provenance": checkpoint.get("encoder_provenance"),
                     "protocol_id": protocol["protocol_id"] if protocol else None,
                     "run_signature": checkpoint.get("run_signature"),
                     "cache_id": checkpoint.get("cache_id"),
-                    "checkpoint_sha256": file_digest(ckpt),
+                    "checkpoint_sha256": checkpoint_sha256,
+                    "policy_sha256": checkpoint_sha256,
                     "checkpoint_epoch": checkpoint.get("epoch"),
                     "optimizer_step": checkpoint.get("optimizer_step", checkpoint.get("global_step")),
                     "torch_version": torch.__version__,
