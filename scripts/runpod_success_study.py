@@ -32,6 +32,35 @@ def stamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def prime_backbone_image_token_id(cfg) -> int:
+    """Resolve the lightweight processor/config field the encoder later writes to cfg.
+
+    ``VLAModel`` resolves this value while loading its backbone. The runner must
+    set it before signing the config, otherwise the same run gets a different
+    signature before and after encoder construction.
+    """
+    from transformers import AutoConfig, AutoProcessor
+    from models.backbones import MODELS, _img_token_id
+
+    if cfg.vlm_backbone == "groot":
+        model_root = MODELS / "cosmos_reason2_2b"
+        if not model_root.exists():
+            model_root = MODELS / "cosmos_reason2_2b_tok"
+        processor_kwargs = {"size": {"shortest_edge": 256 * 256,
+                                     "longest_edge": 256 * 256}}
+    elif cfg.vlm_backbone == "qwen3vl":
+        model_root = MODELS / "qwen3_vl_2b"
+        processor_kwargs = {"size": {"shortest_edge": 256 * 256,
+                                     "longest_edge": 256 * 256}}
+    else:
+        raise ValueError(f"Unsupported success-study backbone: {cfg.vlm_backbone}")
+
+    processor = AutoProcessor.from_pretrained(str(model_root), **processor_kwargs)
+    backbone_config = AutoConfig.from_pretrained(str(model_root))
+    cfg.image_token_id = int(_img_token_id(backbone_config, processor))
+    return cfg.image_token_id
+
+
 def build_jobs(plan: dict, dataset: str, run_root: Path, workers: int,
                plan_path: Path, durable_root: Path) -> list[dict]:
     if plan.get("schema") != 2 or plan.get("checkpoint_rule") != "highest_development_success_rate_earliest_tie":
@@ -57,6 +86,7 @@ def build_jobs(plan: dict, dataset: str, run_root: Path, workers: int,
             cfg.warmup_steps = int(plan["warmup_updates"])
             cfg.min_lr_ratio = float(plan["minimum_learning_rate_ratio"])
             cfg.lr_decay_epochs = None
+            prime_backbone_image_token_id(cfg)
             expected_views = len(setting.get("camera_views", ["top"]))
             if getattr(cfg, "n_views", 1) != expected_views:
                 raise ValueError(f"{dataset}/{experiment} camera count differs from the locked plan")
@@ -121,7 +151,7 @@ def sync_tree(source: Path, destination: Path) -> int:
         return 0
     copied = 0
     for path in source.rglob("*"):
-        if path.is_file():
+        if path.is_file() and not path.name.startswith("recovery_e"):
             copied += int(sync_file(path, destination / path.relative_to(source)))
     return copied
 

@@ -41,7 +41,7 @@ sys.path.insert(0, str(ROOT))
 
 from configs.registry import get_config
 from models.vla_train import VLATrainModel
-from scripts.checkpoint_io import atomic_copy_checkpoint
+from scripts.checkpoint_io import atomic_copy_checkpoint, latest_verified_recovery, publish_recovery_revision
 from scripts.run_log import log_event, write_json_atomic
 
 _FAILURE_CONTEXT: dict = {}
@@ -630,13 +630,16 @@ def main(argv: list[str] | None = None) -> None:
             raise ValueError(f"Recovery checkpoint identity mismatch at {source}: {mismatched}")
 
     def restore_durable_recovery_if_newer() -> None:
-        if rollout_controller is None or args.fresh or not durable_last_path.is_file():
+        if rollout_controller is None or args.fresh:
+            return
+        durable_recovery_path = latest_verified_recovery(durable_last_path.parent) or durable_last_path
+        if not durable_recovery_path.is_file():
             return
         from experiment_protocol import file_digest
-        durable_ck = torch.load(durable_last_path, map_location="cpu", weights_only=False)
-        validate_recovery_identity(durable_ck, durable_last_path)
+        durable_ck = torch.load(durable_recovery_path, map_location="cpu", weights_only=False)
+        validate_recovery_identity(durable_ck, durable_recovery_path)
         if not last_path.is_file():
-            atomic_copy_checkpoint(durable_last_path, last_path, file_digest(durable_last_path))
+            atomic_copy_checkpoint(durable_recovery_path, last_path, file_digest(durable_recovery_path))
             log_event("training.durable_last_restored", path=str(last_path),
                       durable_path=str(durable_last_path), epoch=durable_ck.get("epoch"),
                       optimizer_step=durable_ck.get("global_step"))
@@ -647,7 +650,7 @@ def main(argv: list[str] | None = None) -> None:
         except Exception as exc:
             log_event("training.local_last_rejected", level="WARNING", path=str(last_path),
                       error=f"{type(exc).__name__}: {exc}")
-            atomic_copy_checkpoint(durable_last_path, last_path, file_digest(durable_last_path))
+            atomic_copy_checkpoint(durable_recovery_path, last_path, file_digest(durable_recovery_path))
             log_event("training.durable_last_restored", path=str(last_path),
                       durable_path=str(durable_last_path), epoch=durable_ck.get("epoch"),
                       optimizer_step=durable_ck.get("global_step"))
@@ -658,11 +661,11 @@ def main(argv: list[str] | None = None) -> None:
                     int(checkpoint.get("recovery_revision", 0)))
         local_order, durable_order = order(local_ck), order(durable_ck)
         if durable_order > local_order:
-            atomic_copy_checkpoint(durable_last_path, last_path, file_digest(durable_last_path))
+            atomic_copy_checkpoint(durable_recovery_path, last_path, file_digest(durable_recovery_path))
             log_event("training.durable_last_restored", path=str(last_path),
                       durable_path=str(durable_last_path), epoch=durable_order[0],
                       optimizer_step=durable_order[1], recovery_revision=durable_order[2])
-        elif durable_order == local_order and file_digest(last_path) != file_digest(durable_last_path):
+        elif durable_order == local_order and file_digest(last_path) != file_digest(durable_recovery_path):
             raise ValueError("Local and durable last.pt have conflicting contents at the same recovery revision")
 
     def save_recovery_checkpoint(epoch: int, val_loss: float | None) -> None:
@@ -685,6 +688,8 @@ def main(argv: list[str] | None = None) -> None:
         torch.save(payload, tmp)
         tmp.replace(last_path)
         if rollout_controller is not None:
+            revision_path = publish_recovery_revision(last_path, durable_last_path.parent,
+                                                     epoch, recovery_revision)
             for name in ("history.jsonl", "training_curve.png"):
                 artifact = Path(cfg.output_dir) / name
                 if artifact.is_file():
@@ -692,6 +697,7 @@ def main(argv: list[str] | None = None) -> None:
             durable_sha = atomic_copy_checkpoint(last_path, durable_last_path)
             log_event("training.durable_last_committed", path=str(durable_last_path),
                       sha256=durable_sha, epoch=epoch, optimizer_step=global_step,
+                      immutable_recovery_path=str(revision_path),
                       recovery_revision=recovery_revision)
             write_json_atomic(rollout_state_path, {
                 "schema": 1, "study_id": args.rollout_study_id,

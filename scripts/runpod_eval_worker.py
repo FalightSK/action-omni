@@ -1,6 +1,7 @@
 """Evaluate complete checkpoints published by RunPod training-only workers.
 
-The worker discovers only atomic ``*.task.json`` manifests on the shared volume.
+The worker discovers ``*.task.json`` manifests on the shared volume and retries
+files that are not yet fully visible or parseable.
 It stages the exact model assets named by each task, verifies the checkpoint,
 and dispatches ALOHA and LIBERO evaluation through their separate Python envs.
 """
@@ -29,11 +30,29 @@ from scripts.run_log import log_event, write_json_atomic
 from scripts.success_queue import validate_rollout_result
 
 _VERIFIED_ASSETS: dict[tuple[str, int, int, str], bool] = {}
-_SEEN_MANIFEST_ERRORS: set[str] = set()
+_SEEN_MANIFEST_WARNINGS: set[str] = set()
+
+
+class SharedArtifactPending(OSError):
+    """A shared-volume payload is not fully visible yet and should be retried."""
 
 
 def stamp() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def write_worker_status(path: Path, value: dict) -> None:
+    """Best-effort status write for the shared volume, where rename is not atomic."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(value, indent=2, sort_keys=True, default=str) + "\n"
+        path.write_text(payload, encoding="utf-8")
+        if path.read_text(encoding="utf-8") != payload:
+            raise IOError("shared status readback differs from the written bytes")
+    except OSError as exc:
+        # Status is advisory; task/result SHA validation is the completion gate.
+        log_event("eval.status_write_pending", level="WARNING", path=str(path),
+                  error_type=type(exc).__name__, error=str(exc))
 
 
 def safe_relative(root: Path, relative: str) -> Path:
@@ -55,15 +74,17 @@ def discover_tasks(durable_root: Path) -> list[tuple[Path, dict]]:
     for path in sorted(task_root.rglob("*.task.json")):
         try:
             task = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(task, dict):
+                raise ValueError("task manifest is not a JSON object")
             if task.get("schema") != 1 or task.get("status") != "ready":
                 raise ValueError("unsupported schema or task not ready")
             if not task.get("task_id"):
                 raise ValueError("task id is missing")
             tasks.append((path, task))
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            if path.as_posix() not in _SEEN_MANIFEST_ERRORS:
-                log_event("eval.task_manifest_invalid", level="ERROR", path=str(path), error=str(exc))
-                _SEEN_MANIFEST_ERRORS.add(path.as_posix())
+            if path.as_posix() not in _SEEN_MANIFEST_WARNINGS:
+                log_event("eval.task_manifest_pending", level="WARNING", path=str(path), error=str(exc))
+                _SEEN_MANIFEST_WARNINGS.add(path.as_posix())
     def task_order(entry):
         task = entry[1]
         purpose = task.get("purpose")
@@ -87,13 +108,19 @@ def validate_task_checkpoint(task: dict, durable_root: Path) -> tuple[Path, dict
     checkpoint_meta = task.get("checkpoint") or {}
     checkpoint_path = safe_relative(durable_root, checkpoint_meta.get("path", ""))
     if not checkpoint_path.is_file():
-        raise FileNotFoundError(f"Published checkpoint is missing: {checkpoint_path}")
-    if checkpoint_path.stat().st_size != checkpoint_meta.get("size_bytes"):
-        raise ValueError("Published checkpoint size differs from task metadata")
-    actual_sha = file_digest(checkpoint_path)
-    if actual_sha != checkpoint_meta.get("sha256"):
-        raise ValueError("Published checkpoint digest differs from task metadata")
-    checkpoint = torch.load(checkpoint_path, map_location="meta", weights_only=False)
+        raise SharedArtifactPending(f"Published checkpoint is not visible yet: {checkpoint_path}")
+    try:
+        if checkpoint_path.stat().st_size != checkpoint_meta.get("size_bytes"):
+            raise SharedArtifactPending("Published checkpoint size is not fully visible yet")
+        actual_sha = file_digest(checkpoint_path)
+        if actual_sha != checkpoint_meta.get("sha256"):
+            raise SharedArtifactPending("Published checkpoint digest is not fully visible yet")
+        checkpoint = torch.load(checkpoint_path, map_location="meta", weights_only=False)
+    except SharedArtifactPending:
+        raise
+    except Exception as exc:
+        raise SharedArtifactPending(
+            f"Published checkpoint is not readable yet: {type(exc).__name__}: {exc}") from exc
     expected = {"dataset": task["dataset"], "exp_id": task["experiment"],
                 "training_seed": task["training_seed"], "protocol_id": task["protocol_id"],
                 "run_signature": task["run_signature"]}
@@ -158,12 +185,19 @@ def stage_model_assets(task: dict, durable_root: Path) -> None:
         source_rel = PurePosixPath(*source_key.parts[1:]).as_posix()
         source = safe_relative(durable_root / "assets", source_rel)
         if not source.is_file():
-            raise ValueError(f"Shared model asset is missing or changed: {source}")
-        source_stat = source.stat()
+            raise SharedArtifactPending(f"Shared model asset is not visible yet: {source}")
+        try:
+            source_stat = source.stat()
+        except OSError as exc:
+            raise SharedArtifactPending(f"Shared model asset metadata is not visible yet: {source}") from exc
         source_key = (str(source), source_stat.st_size, source_stat.st_mtime_ns, expected_sha)
         if source_key not in _VERIFIED_ASSETS:
-            if file_digest(source) != expected_sha:
-                raise ValueError(f"Shared model asset is missing or changed: {source}")
+            try:
+                actual_sha = file_digest(source)
+            except OSError as exc:
+                raise SharedArtifactPending(f"Shared model asset is not readable yet: {source}") from exc
+            if actual_sha != expected_sha:
+                raise SharedArtifactPending(f"Shared model asset digest is not fully visible yet: {source}")
             _VERIFIED_ASSETS[source_key] = True
         destination = safe_relative(ROOT, key)
         if destination.is_file():
@@ -206,6 +240,8 @@ def local_result_matches(result_path: Path, task: dict, *, published: bool = Fal
     try:
         result = json.loads(result_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        return False
+    if not isinstance(result, dict):
         return False
     expected = {"dataset": task["dataset"], "exp_id": task["experiment"],
                 "training_seed": task["training_seed"], "protocol_id": task["protocol_id"],
@@ -293,20 +329,19 @@ def validate_trajectory(path: Path, task: dict, result: dict) -> None:
 
 
 def copy_file_atomic(source: Path, destination: Path) -> tuple[int, str]:
+    """Copy and verify a shared artifact without relying on atomic rename.
+
+    Consumers validate the manifest's size and digest and treat an incomplete
+    copy as pending, so an interrupted direct copy cannot be accepted.
+    """
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(destination.name + f".{os.getpid()}.tmp")
-    try:
-        shutil.copyfile(source, temporary)
-        size, sha256 = temporary.stat().st_size, file_digest(temporary)
-        if size != source.stat().st_size or sha256 != file_digest(source):
-            raise IOError(f"Durable copy verification failed: {source} -> {destination}")
-        os.replace(temporary, destination)
-        stat = destination.stat()
-        _VERIFIED_ASSETS[(str(destination), stat.st_size, stat.st_mtime_ns, sha256)] = True
-        return size, sha256
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+    shutil.copyfile(source, destination)
+    size, sha256 = destination.stat().st_size, file_digest(destination)
+    if size != source.stat().st_size or sha256 != file_digest(source):
+        raise SharedArtifactPending(f"Durable copy is not fully visible yet: {source} -> {destination}")
+    stat = destination.stat()
+    _VERIFIED_ASSETS[(str(destination), stat.st_size, stat.st_mtime_ns, sha256)] = True
+    return size, sha256
 
 
 def task_status_path(durable_root: Path, task: dict) -> Path:
@@ -337,7 +372,7 @@ def retry_delay(status_path: Path, base_seconds: float, max_seconds: float) -> t
     """Return remaining bounded exponential backoff for a failed task."""
     try:
         status = json.loads(status_path.read_text(encoding="utf-8"))
-        if status.get("status") != "failed":
+        if not isinstance(status, dict) or status.get("status") != "failed":
             return 0.0, 0
         attempt = max(1, int(status.get("attempt", 1)))
         failed = datetime.fromisoformat(status["updated_utc"].replace("Z", "+00:00"))
@@ -352,9 +387,9 @@ def evaluate_one(task_file: Path, task: dict, durable_root: Path, work_root: Pat
                  aloha_python: str, libero_python: str, aloha_gl: str = "glfw") -> bool:
     status_path = task_status_path(durable_root, task)
     if published_result_matches(durable_root, task):
-        write_json_atomic(status_path, {"task_id": task["task_id"], "status": "complete",
-                                        "updated_utc": stamp(), "result": task["result_path"],
-                                        "skipped": True})
+        write_worker_status(status_path, {"task_id": task["task_id"], "status": "complete",
+                                          "updated_utc": stamp(), "result": task["result_path"],
+                                          "attempt": 0, "skipped": True})
         log_event("eval.task_skipped", task_id=task["task_id"], reason="matching result already published")
         return True
 
@@ -364,9 +399,9 @@ def evaluate_one(task_file: Path, task: dict, durable_root: Path, work_root: Pat
         attempt = int(previous_status.get("attempt", 0)) + 1
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         attempt = 1
-    write_json_atomic(status_path, {"task_id": task["task_id"], "status": "validating",
-                                    "updated_utc": stamp(), "attempt": attempt,
-                                    "task_file": str(task_file)})
+    write_worker_status(status_path, {"task_id": task["task_id"], "status": "validating",
+                                      "updated_utc": stamp(), "attempt": attempt,
+                                      "task_file": str(task_file)})
     log_event("eval.task_started", task_id=task["task_id"], dataset=task["dataset"],
               experiment=task["experiment"], backbone=task["backbone"],
               training_seed=task["training_seed"], checkpoint_tag=task["checkpoint_tag"],
@@ -424,9 +459,9 @@ def evaluate_one(task_file: Path, task: dict, durable_root: Path, work_root: Pat
                 raise RuntimeError("Headless ALOHA needs xvfb-run; run scripts/setup_runpod_eval.sh")
             command = [xvfb, "-a", *command]
         log_path = local_root / "evaluation.log"
-        write_json_atomic(status_path, {"task_id": task["task_id"], "status": "evaluating",
-                                        "updated_utc": stamp(), "log": str(log_path),
-                                        "command": command})
+        write_worker_status(status_path, {"task_id": task["task_id"], "status": "evaluating",
+                                          "updated_utc": stamp(), "log": str(log_path),
+                                          "command": command})
         log_event("eval.subprocess_started", task_id=task["task_id"], python=command[0],
                   simulator=task["dataset"], log=str(log_path))
         with log_path.open("w", encoding="utf-8") as log:
@@ -473,31 +508,28 @@ def evaluate_one(task_file: Path, task: dict, durable_root: Path, work_root: Pat
         result_rel = task["result_path"]
         result_dst = durable_result_path(durable_root, task)
         write_json_atomic(local_result, result)
-        result_dst.parent.mkdir(parents=True, exist_ok=True)
-        temporary = result_dst.with_name(result_dst.name + f".{os.getpid()}.tmp")
-        try:
-            shutil.copyfile(local_result, temporary)
-            os.replace(temporary, result_dst)
-        finally:
-            if temporary.exists():
-                temporary.unlink()
+        copy_file_atomic(local_result, result_dst)
         if not local_result_matches(result_dst, task, published=True):
             raise IOError("Durable evaluation result failed post-copy identity validation")
         if task.get("trajectory_path") and not published_result_matches(durable_root, task):
             raise IOError("Durable final trajectory/result pointer failed post-copy validation")
-        write_json_atomic(status_path, {"task_id": task["task_id"], "status": "complete",
-                                        "updated_utc": stamp(), "result": result_rel,
-                                        "elapsed_s": round(time.perf_counter() - started, 3),
-                                        "log": str(log_path)})
+        write_worker_status(status_path, {"task_id": task["task_id"], "status": "complete",
+                                          "updated_utc": stamp(), "result": result_rel,
+                                          "attempt": attempt,
+                                          "elapsed_s": round(time.perf_counter() - started, 3),
+                                          "log": str(log_path)})
         log_event("eval.task_complete", task_id=task["task_id"], result=str(result_dst),
                   elapsed_s=round(time.perf_counter() - started, 3))
         return True
     except Exception as exc:
-        write_json_atomic(status_path, {"task_id": task["task_id"], "status": "failed",
-                                        "updated_utc": stamp(), "attempt": attempt,
-                                        "error_type": type(exc).__name__,
-                                        "error": str(exc), "traceback": traceback.format_exc()})
-        log_event("eval.task_failed", level="ERROR", task_id=task["task_id"],
+        retryable = isinstance(exc, SharedArtifactPending)
+        write_worker_status(status_path, {"task_id": task["task_id"], "status": "failed",
+                                          "updated_utc": stamp(), "attempt": attempt,
+                                        "retryable": retryable,
+                                          "error_type": type(exc).__name__,
+                                          "error": str(exc), "traceback": traceback.format_exc()})
+        log_event("eval.task_artifact_pending" if retryable else "eval.task_failed",
+                  level="WARNING" if retryable else "ERROR", task_id=task["task_id"],
                   attempt=attempt, error_type=type(exc).__name__, error=str(exc),
                   elapsed_s=round(time.perf_counter() - started, 3))
         return False
@@ -535,17 +567,16 @@ def main(argv: list[str] | None = None) -> int:
               once=args.once, poll_seconds=args.poll_seconds,
               retry_base_seconds=args.retry_base_seconds,
               retry_max_seconds=args.retry_max_seconds)
-    seen_manifest_errors: set[str] = set()
     deferred_attempts: dict[str, int] = {}
     completed_task_ids: set[str] = set()
+    failed_task_ids: set[str] = set()
+    pending_task_ids: set[str] = set()
     total_ok = total_failed = 0
     idle_logged = False
     while True:
         task_entries = discover_tasks(durable_root)
         dispatched = False
         for task_file, task in task_entries:
-            if task_file.as_posix() in seen_manifest_errors:
-                continue
             if task["task_id"] in completed_task_ids:
                 continue
             status_path = task_status_path(durable_root, task)
@@ -557,8 +588,10 @@ def main(argv: list[str] | None = None) -> int:
                 if published_result_matches(durable_root, task):
                     completed_task_ids.add(task["task_id"])
                     continue
-                log_event("eval.completed_artifact_invalid", level="WARNING",
-                          task_id=task["task_id"], reason="published result/artifact no longer verifies")
+                pending_task_ids.add(task["task_id"])
+                log_event("eval.completed_artifact_pending", level="WARNING",
+                          task_id=task["task_id"], reason="completed result/artifact is not visible or verified yet")
+                continue
             delay, attempt = retry_delay(task_status_path(durable_root, task),
                                          args.retry_base_seconds, args.retry_max_seconds)
             if delay > 0:
@@ -571,24 +604,49 @@ def main(argv: list[str] | None = None) -> int:
                 ok = evaluate_one(task_file, task, durable_root, work_root,
                                   args.aloha_python, args.libero_python, args.aloha_gl)
             except Exception as exc:
-                seen_manifest_errors.add(task_file.as_posix())
-                log_event("eval.task_dispatch_failed", level="ERROR", path=str(task_file),
+                retryable = isinstance(exc, SharedArtifactPending)
+                log_event("eval.task_dispatch_deferred", level="WARNING", path=str(task_file),
                           task_id=task.get("task_id"), error_type=type(exc).__name__, error=str(exc))
+                try:
+                    prior = json.loads(status_path.read_text(encoding="utf-8"))
+                    attempt = max(1, int(prior.get("attempt", 0)) + 1)
+                except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                    attempt = 1
+                write_worker_status(status_path, {"task_id": task["task_id"], "status": "failed",
+                                                  "updated_utc": stamp(), "attempt": attempt,
+                                                  "retryable": retryable,
+                                                  "error_type": type(exc).__name__, "error": str(exc)})
                 ok = False
             if ok:
                 total_ok += 1
                 if published_result_matches(durable_root, task):
                     completed_task_ids.add(task["task_id"])
+                    failed_task_ids.discard(task["task_id"])
+                    pending_task_ids.discard(task["task_id"])
+                else:
+                    pending_task_ids.add(task["task_id"])
             else:
                 total_failed += 1
+                try:
+                    latest_status = json.loads(status_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                    latest_status = {}
+                if not isinstance(latest_status, dict):
+                    latest_status = {}
+                if latest_status.get("retryable") is True:
+                    pending_task_ids.add(task["task_id"])
+                else:
+                    failed_task_ids.add(task["task_id"])
             dispatched = True
             # Re-discover after each evaluation. A newly published development
             # rollout then preempts queued final tasks at the next dispatch point.
             break
         if args.once:
             if not dispatched:
-                log_event("eval.worker_sweep_complete", completed=total_ok, failed=total_failed)
-                return 1 if total_failed else 0
+                log_event("eval.worker_sweep_complete", completed=total_ok,
+                          failed=len(failed_task_ids), pending=len(pending_task_ids),
+                          failed_attempts=total_failed)
+                return 1 if failed_task_ids else 0
         if dispatched:
             if idle_logged:
                 log_event("eval.queue_resumed", pending=len(task_entries))
@@ -599,8 +657,10 @@ def main(argv: list[str] | None = None) -> int:
                       discovered_tasks=len(task_entries), completed_tasks=len(completed_task_ids))
             idle_logged = True
         if args.once:
-            log_event("eval.worker_sweep_complete", completed=total_ok, failed=total_failed)
-            return 1 if total_failed else 0
+            log_event("eval.worker_sweep_complete", completed=total_ok,
+                      failed=len(failed_task_ids), pending=len(pending_task_ids),
+                      failed_attempts=total_failed)
+            return 1 if failed_task_ids else 0
         time.sleep(args.poll_seconds)
 
 

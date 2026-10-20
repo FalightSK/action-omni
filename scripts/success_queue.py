@@ -4,7 +4,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
 import json
-import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -12,7 +11,39 @@ import time
 from typing import Mapping
 
 from experiment_protocol import digest, file_digest, sampling_seed
-from scripts.run_log import log_event, write_json_atomic
+from scripts.run_log import log_event
+
+
+_RESULT_WARNING_AT: dict[str, float] = {}
+
+
+def _warn_pending_result(path: Path, task: Mapping, reason: str,
+                         exc: Exception | None = None) -> None:
+    now = time.monotonic()
+    key = str(path)
+    last_warning = _RESULT_WARNING_AT.get(key, 0.0)
+    if now - last_warning < 60.0:
+        return
+    fields = {"task_id": task["task_id"], "reason": reason}
+    if exc is not None:
+        fields.update(error_type=type(exc).__name__, error=str(exc))
+    log_event("success_rollout.result_pending", level="WARNING", **fields)
+    _RESULT_WARNING_AT[key] = now
+
+
+def _write_shared_json(path: Path, value: Mapping) -> None:
+    """Write a shared-volume JSON document and verify the bytes in place.
+
+    Global Volumes do not guarantee atomic rename. The queue's readers already
+    validate task identity/checkpoint SHA and retry incomplete documents, so
+    write the immutable task manifest directly after its checkpoint is ready.
+    """
+    payload = json.dumps(value, indent=2, sort_keys=True, default=str) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(payload, encoding="utf-8")
+    observed = path.read_text(encoding="utf-8")
+    if observed != payload:
+        raise IOError(f"Shared-volume JSON publication failed verification: {path}")
 
 
 def _safe_component(value: object) -> str:
@@ -149,22 +180,20 @@ def _validate_evaluation(evaluation: Mapping, dataset: str, purpose: str) -> dic
 
 def _publish_checkpoint(source: Path, destination: Path, expected_sha256: str) -> int:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(destination.name + f".{time.time_ns()}.tmp")
-    try:
-        shutil.copyfile(source, temporary)
-        if temporary.stat().st_size != source.stat().st_size or file_digest(temporary) != expected_sha256:
-            raise IOError(f"Durable selection checkpoint copy failed verification: {source}")
-        os.replace(temporary, destination)
-        return destination.stat().st_size
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+    # This task-specific checkpoint path is immutable. Readers accept it only
+    # after the manifest's size and SHA checks pass, so a partial direct copy is
+    # pending rather than a usable checkpoint.
+    shutil.copyfile(source, destination)
+    size = destination.stat().st_size
+    if (size != source.stat().st_size or file_digest(destination) != expected_sha256):
+        raise IOError(f"Durable selection checkpoint copy failed verification: {source}")
+    return size
 
 
 def publish_rollout_task(cfg, metadata: Mapping, checkpoint_path: str | Path,
                          evaluation: Mapping, purpose: str, plan_id: str,
                          study_id: str, durable_root: str | Path) -> dict:
-    """Verify and atomically publish one dev-selection or selected-final rollout task.
+    """Verify and publish one dev-selection or selected-final rollout task.
 
     Re-publishing an identical task is idempotent. Reusing a task identity for a
     different checkpoint or settings is rejected to protect resume and provenance.
@@ -228,21 +257,34 @@ def publish_rollout_task(cfg, metadata: Mapping, checkpoint_path: str | Path,
         raise ValueError("Final test task must record the selected development epoch")
 
     if task_path.is_file():
-        old = json.loads(task_path.read_text(encoding="utf-8"))
-        identity_fields = ("task_id", "plan_id", "dataset", "experiment", "backbone", "training_seed",
-                           "checkpoint_tag", "purpose", "is_final", "optimizer_step", "protocol_id",
-                           "run_signature", "feature_mode", "checkpoint", "validation_metrics_sha256",
-                           "source_assets", "evaluation", "trajectory_path", "result_path",
-                           "selection_epoch", "selected_checkpoint_sha256")
-        if any(old.get(key) != task.get(key) for key in identity_fields):
-            raise ValueError(f"Rollout task identity already exists with different checkpoint/settings: {task_id}")
-        if (checkpoint_dst.is_file() and checkpoint_dst.stat().st_size == source_stat.st_size
-                and file_digest(checkpoint_dst) == checkpoint_sha256):
-            return old
-        raise IOError(f"Existing rollout task has missing/corrupt durable checkpoint: {task_id}")
+        try:
+            old = json.loads(task_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            old = None
+            log_event("success_rollout.task_manifest_pending", level="WARNING",
+                      task_id=task_id, reason="existing shared manifest is incomplete; rewriting")
+        if isinstance(old, dict):
+            identity_fields = ("task_id", "plan_id", "dataset", "experiment", "backbone", "training_seed",
+                               "checkpoint_tag", "purpose", "is_final", "optimizer_step", "protocol_id",
+                               "run_signature", "feature_mode", "checkpoint", "validation_metrics_sha256",
+                               "source_assets", "evaluation", "trajectory_path", "result_path",
+                               "selection_epoch", "selected_checkpoint_sha256")
+            missing_identity = [key for key in identity_fields if key not in old]
+            if missing_identity:
+                log_event("success_rollout.task_manifest_pending", level="WARNING",
+                          task_id=task_id, reason="existing shared manifest is incomplete",
+                          missing_fields=missing_identity)
+                old = None
+            elif any(old.get(key) != task.get(key) for key in identity_fields):
+                raise ValueError(f"Rollout task identity already exists with different checkpoint/settings: {task_id}")
+        if isinstance(old, dict):
+            if (checkpoint_dst.is_file() and checkpoint_dst.stat().st_size == source_stat.st_size
+                    and file_digest(checkpoint_dst) == checkpoint_sha256):
+                return old
+            raise IOError(f"Existing rollout task has missing/corrupt durable checkpoint: {task_id}")
 
     _publish_checkpoint(checkpoint_path, checkpoint_dst, checkpoint_sha256)
-    write_json_atomic(task_path, task)
+    _write_shared_json(task_path, task)
     log_event("success_rollout.task_published", task_id=task_id, purpose=purpose,
               dataset=identity["dataset"], experiment=identity["experiment"],
               training_seed=seed, optimizer_step=identity["optimizer_step"],
@@ -348,20 +390,26 @@ def _valid_sha256(value: object) -> bool:
 
 
 def read_rollout_result(task: Mapping, durable_root: str | Path) -> dict | None:
-    """Read a complete exact result once; missing is pending, invalid is an error."""
+    """Read a complete exact result; missing/transient shared bytes are pending."""
     durable_root = Path(durable_root).resolve()
     result_path = _result_path(task, durable_root)
     if not result_path.is_file():
+        _warn_pending_result(result_path, task, "shared result is not visible yet")
         return None
-    result = json.loads(result_path.read_text(encoding="utf-8"))
-    validated = validate_rollout_result(task, result)
-    if task.get("trajectory_path"):
-        pointer = result.get("trajectory") or {}
-        trace = _relative_path(durable_root, task["trajectory_path"])
-        if (pointer.get("path") != task["trajectory_path"] or not trace.is_file()
-                or trace.stat().st_size != pointer.get("size_bytes")
-                or file_digest(trace) != pointer.get("sha256")):
-            raise ValueError("Final ALOHA rollout trajectory pointer/file failed verification")
+    try:
+        result = json.loads(result_path.read_text(encoding="utf-8"))
+        validated = validate_rollout_result(task, result)
+        if task.get("trajectory_path"):
+            pointer = result.get("trajectory") or {}
+            trace = _relative_path(durable_root, task["trajectory_path"])
+            if (pointer.get("path") != task["trajectory_path"] or not trace.is_file()
+                    or trace.stat().st_size != pointer.get("size_bytes")
+                    or file_digest(trace) != pointer.get("sha256")):
+                raise ValueError("Final ALOHA rollout trajectory pointer/file is not fully visible yet")
+    except (OSError, ValueError, TypeError, KeyError, AttributeError,
+            json.JSONDecodeError) as exc:
+        _warn_pending_result(result_path, task, "shared result or referenced trajectory is incomplete", exc)
+        return None
     log_event("success_rollout.result_ready", task_id=task["task_id"],
               purpose=task["purpose"], success_rate=validated["success_rate"])
     return validated
@@ -384,14 +432,17 @@ def wait_for_rollout(task: Mapping, durable_root: str | Path,
                 validated = read_rollout_result(task, durable_root)
                 if validated is not None:
                     return validated
-            except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
-                # The atomic result may be absent or not yet complete while the worker is publishing it.
+                if result_path.is_file():
+                    last_status = "result_pending_or_invalid: shared file is incomplete or does not match task SHA/identity"
+            except (OSError, ValueError, TypeError, KeyError, AttributeError,
+                    json.JSONDecodeError) as exc:
+                # A shared-volume result may be absent or still propagating.
                 last_status = f"result_pending_or_invalid: {type(exc).__name__}: {exc}"
         if status_path.is_file():
             try:
                 status = json.loads(status_path.read_text(encoding="utf-8"))
                 last_status = f"{status.get('status')}: {status.get('error', '')}"
-            except (OSError, ValueError, json.JSONDecodeError):
+            except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
                 pass
         time.sleep(min(poll_s, max(0.0, timeout_s - (time.monotonic() - started))))
     raise TimeoutError(f"Timed out waiting for rollout {task['task_id']}; latest status: {last_status}")

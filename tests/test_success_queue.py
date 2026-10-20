@@ -151,17 +151,31 @@ class SuccessQueueTests(unittest.TestCase):
         with self.assertRaises(TimeoutError):
             wait_for_rollout(task, self.durable, timeout_s=0.02, poll_s=0.005)
 
-    def test_nonblocking_result_read_distinguishes_pending_from_invalid(self):
+    def test_nonblocking_result_read_treats_partial_and_wrong_identity_as_pending(self):
         task = self.publish()
         self.assertIsNone(read_rollout_result(task, self.durable))
-        result = self.aloha_result(task)
         result_path = self.durable / task["result_path"]
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text('{"task_id":', encoding="utf-8")
+        self.assertIsNone(read_rollout_result(task, self.durable))
+        result_path.write_text("[]", encoding="utf-8")
+        self.assertIsNone(read_rollout_result(task, self.durable))
+        result = self.aloha_result(task)
         write_json(result_path, result)
         self.assertEqual(read_rollout_result(task, self.durable)["success_rate"], 0.5)
         result["checkpoint_sha256"] = "f" * 64
         write_json(result_path, result)
-        with self.assertRaises(ValueError):
-            read_rollout_result(task, self.durable)
+        self.assertIsNone(read_rollout_result(task, self.durable))
+        with self.assertRaises(TimeoutError):
+            wait_for_rollout(task, self.durable, timeout_s=0.02, poll_s=0.005)
+
+    def test_republish_repairs_incomplete_shared_manifest(self):
+        task = self.publish()
+        task_path = self.durable / "evaluation_tasks" / "study-unit" / ("a" * 12) / "aloha" / "exp05" / "seed_003" / "selection_epoch_000100.task.json"
+        task_path.write_text('{"schema":', encoding="utf-8")
+        republished = self.publish()
+        self.assertEqual(republished["task_id"], task["task_id"])
+        self.assertEqual(json.loads(task_path.read_text(encoding="utf-8"))["task_id"], task["task_id"])
 
 
 if __name__ == "__main__":

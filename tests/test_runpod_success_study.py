@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 import sys
 import tempfile
@@ -65,6 +66,100 @@ def make_job(root: Path, index: int) -> dict:
 
 
 class RunpodSuccessStudyTests(unittest.TestCase):
+    def test_sync_tree_skips_durable_recovery_backups(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as tmp:
+            root = Path(tmp)
+            source = root / "durable-run"
+            destination = root / "local-run"
+            source.mkdir()
+            (source / "last.pt").write_bytes(b"mutable checkpoint")
+            (source / "history.jsonl").write_text('{"epoch": 4}\n', encoding="utf-8")
+            backup = source / ("recovery_e000004_r00000002_" + "a" * 64 + ".pt")
+            backup.write_bytes(b"large immutable recovery backup")
+
+            copied = study.sync_tree(source, destination)
+
+            self.assertEqual(copied, 2)
+            self.assertTrue((destination / "last.pt").is_file())
+            self.assertTrue((destination / "history.jsonl").is_file())
+            self.assertFalse((destination / backup.name).exists())
+
+    def test_build_jobs_signs_resolved_backbone_image_token(self):
+        @dataclass
+        class Config:
+            vlm_backbone: str
+            output_dir: str
+            image_token_id: int = 248056
+            n_views: int = 1
+            batch_size: int = 1
+            num_epochs: int = 1
+            min_epochs: int = 0
+            warmup_steps: int = 0
+            min_lr_ratio: float = 0.0
+            lr_decay_epochs: int | None = 1
+            embeddings_cache: str = ""
+
+        class FakeAutoConfig:
+            @staticmethod
+            def from_pretrained(path):
+                token_id = 151655 if Path(path).name == "cosmos_reason2_2b" else 151656
+                return types.SimpleNamespace(image_token_id=token_id)
+
+        class FakeAutoProcessor:
+            @staticmethod
+            def from_pretrained(path, **_kwargs):
+                return types.SimpleNamespace(source=path)
+
+        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as tmp:
+            root = Path(tmp)
+            model_root = root / "models"
+            (model_root / "cosmos_reason2_2b").mkdir(parents=True)
+            (model_root / "qwen3_vl_2b").mkdir()
+            fake_backbones = types.ModuleType("models.backbones")
+            fake_backbones.MODELS = model_root
+            fake_backbones._img_token_id = lambda config, _processor: config.image_token_id
+            fake_transformers = types.ModuleType("transformers")
+            fake_transformers.AutoConfig = FakeAutoConfig
+            fake_transformers.AutoProcessor = FakeAutoProcessor
+
+            plan = {
+                "schema": 2,
+                "checkpoint_rule": "highest_development_success_rate_earliest_tie",
+                "feature_mode": "online",
+                "training_seeds": [3, 4, 5],
+                "datasets": {"aloha": {"reference_epochs": 2, "steps_per_epoch": 140,
+                                         "split_manifest": "configs/aloha/split.json",
+                                         "camera_views": ["top"]}},
+                "stopping": {"maximum_epochs": None, "minimum_epochs": 1},
+                "backbones": {"groot": "exp05", "qwen3vl": "exp06"},
+                "effective_batch_size": 128,
+                "warmup_updates": 100,
+                "minimum_learning_rate_ratio": 0.02,
+                "reference_optimizer_updates": 280,
+            }
+            protocol = {"protocol_id": "protocol"}
+
+            def get_fake_config(_dataset, experiment):
+                backbone = "groot" if experiment == "exp05" else "qwen3vl"
+                return Config(backbone, f"asset/runs/aloha/{experiment}")
+
+            with patch.dict(sys.modules, {"models.backbones": fake_backbones,
+                                          "transformers": fake_transformers}), \
+                 patch.object(study, "get_config", side_effect=get_fake_config), \
+                 patch.object(study, "apply_normalization"), \
+                 patch.object(study, "load_protocol", return_value=protocol), \
+                 patch.object(study, "source_assets", return_value={}), \
+                 patch.object(study, "run_signature",
+                              side_effect=lambda cfg, *_args: str(cfg.image_token_id)):
+                jobs = study.build_jobs(plan, "aloha", root / "runs", 1,
+                                        root / "plan.json", root / "durable")
+
+            self.assertEqual(len(jobs), 6)
+            for job in jobs:
+                expected_id = 151655 if job["backbone"] == "groot" else 151656
+                self.assertEqual(job["run_signature"], str(expected_id))
+                self.assertEqual(job["config"]["image_token_id"], expected_id)
+
     def test_two_training_processes_have_isolated_runner_status(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as tmp:
             root = Path(tmp)
