@@ -16,6 +16,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 import traceback
 import zlib
@@ -36,6 +37,31 @@ def canonical_archive(files: dict[str, bytes]) -> bytes:
             info.uname = info.gname = ""
             tar.addfile(info, io.BytesIO(content))
     return buffer.getvalue()
+
+
+def sample_nvidia_smi_until_stopped(stop_event, sample, interval_s: float = 30.0) -> None:
+    """Sample while a bounded cache step runs; caller always signals and joins."""
+    while not stop_event.is_set():
+        sample()
+        if stop_event.wait(interval_s):
+            return
+
+
+def log_nvidia_smi_sample(label: str) -> None:
+    """Write one complete, unparsed nvidia-smi snapshot to container logs."""
+    record = {
+        "event": "bootstrap.nvidia_smi_sample",
+        "label": label,
+        "sampled_utc": datetime.now(timezone.utc).isoformat(),
+        "command": ["nvidia-smi"],
+    }
+    try:
+        result = subprocess.run(["nvidia-smi"], capture_output=True, text=True,
+                                timeout=10, check=False)
+        record.update(returncode=result.returncode, stdout=result.stdout, stderr=result.stderr)
+    except Exception as exc:
+        record.update(returncode=None, stdout="", stderr=str(exc), error_type=type(exc).__name__)
+    print(json.dumps(record, sort_keys=True), flush=True)
 
 
 def materialize_source(payload: dict) -> tuple[Path, str]:
@@ -166,7 +192,8 @@ def main(payload: dict) -> None:
                 "tests.test_success_queue", "tests.test_eval_worker_queue",
                 "tests.test_vision_patch_projection", "tests.test_online_encoder_stage",
                 "tests.test_checkpoint_io", "tests.test_runpod_success_study",
-                "tests.test_plot_study_losses", "tests.test_prepare_cached_study", "-v"])
+                "tests.test_plot_study_losses", "tests.test_prepare_cached_study",
+                "tests.test_runpod_bootstrap", "-v"])
             plan_path = root / "configs/runpod_cached_success_study.json"
             run("gpu_layout_check", [python, "-c",
                 "import torch,json; assert torch.cuda.device_count()==1; "
@@ -177,7 +204,21 @@ def main(payload: dict) -> None:
             cache_command = [python, "-u", "scripts/prepare_cached_study.py",
                 "--dataset", role, "--durable-root", str(durable), "--study-id", study_id,
                 "--plan", str(plan_path)]
-            run("prepare_feature_caches", cache_command)
+            event("nvidia_smi_before_cacheprep", command=["nvidia-smi"])
+            log_nvidia_smi_sample("before_cacheprep")
+            sampler_stop = threading.Event()
+            sampler = threading.Thread(
+                target=sample_nvidia_smi_until_stopped,
+                args=(sampler_stop, lambda: log_nvidia_smi_sample("prepare_feature_caches")),
+                name="cache-nvidia-smi-sampler", daemon=True)
+            event("gpu_sampling_started", interval_s=30, command=["nvidia-smi"])
+            sampler.start()
+            try:
+                run("prepare_feature_caches", cache_command)
+            finally:
+                sampler_stop.set()
+                sampler.join(timeout=12)
+                event("gpu_sampling_stopped", sampler_thread_alive=sampler.is_alive())
             migration = payload.get("preselection_migration")
             if not migration:
                 raise ValueError("Cached continuation requires its reviewed migration payload")
