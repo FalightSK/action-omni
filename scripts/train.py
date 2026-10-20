@@ -41,10 +41,10 @@ sys.path.insert(0, str(ROOT))
 
 from configs.registry import get_config
 from models.vla_train import VLATrainModel
+from scripts.checkpoint_io import atomic_copy_checkpoint
 from scripts.run_log import log_event, write_json_atomic
 
 _FAILURE_CONTEXT: dict = {}
-
 
 def _cpu_quota_cores() -> float | None:
     """Read a Linux container CPU quota without trusting visible host CPUs."""
@@ -608,27 +608,6 @@ def main(argv: list[str] | None = None) -> None:
 
     recovery_revision = 0
 
-    def atomic_copy_checkpoint(source: Path, destination: Path,
-                               expected_sha256: str | None = None) -> str:
-        from experiment_protocol import file_digest
-        source = Path(source)
-        destination = Path(destination)
-        if source.resolve() == destination.resolve():
-            return file_digest(source)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        temporary = destination.with_name(
-            destination.name + f".{os.getpid()}.{time.time_ns()}.tmp")
-        try:
-            shutil.copy2(source, temporary)
-            actual_sha = file_digest(temporary)
-            if expected_sha256 is not None and actual_sha != expected_sha256:
-                raise IOError(f"Durable checkpoint copy SHA mismatch for {destination}")
-            temporary.replace(destination)
-        finally:
-            if temporary.exists():
-                temporary.unlink()
-        return actual_sha
-
     def durable_counterpart(local_path: Path) -> Path:
         local_path = Path(local_path).resolve()
         try:
@@ -1009,7 +988,7 @@ def main(argv: list[str] | None = None) -> None:
                 raise ValueError("Existing selected.pt differs from the controller's best development checkpoint")
         else:
             temp = selected_path.with_name(selected_path.name + ".tmp")
-            shutil.copy2(source, temp)
+            shutil.copyfile(source, temp)
             if file_digest(temp) != source_sha:
                 raise IOError("selected.pt copy failed SHA-256 verification")
             temp.replace(selected_path)
@@ -1249,7 +1228,7 @@ def main(argv: list[str] | None = None) -> None:
         # finer-grained epoch-boundary recovery point.
         if global_step >= next_recovery_step and last_path.exists():
             previous_tmp = ckpt_dir / "previous.pt.tmp"
-            shutil.copy2(last_path, previous_tmp)
+            shutil.copyfile(last_path, previous_tmp)
             previous_tmp.replace(ckpt_dir / "previous.pt")
             while next_recovery_step <= global_step:
                 next_recovery_step += args.checkpoint_every_steps

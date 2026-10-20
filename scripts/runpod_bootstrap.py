@@ -162,37 +162,12 @@ def main(payload: dict) -> None:
             run("unit_checks", [python, "-m", "unittest", "scripts.success_stopping",
                 "tests.test_success_queue", "tests.test_eval_worker_queue",
                 "tests.test_vision_patch_projection", "tests.test_online_encoder_stage",
-                "tests.test_runpod_success_study", "-v"])
-            if payload.get("direct_training"):
-                # The first real batch checks old/new VLM features on the same
-                # loaded model, then immediately performs an optimizer update.
-                run("success_study", [python, "-u", "scripts/runpod_success_study.py",
-                    "--dataset", role, "--durable-root", str(durable),
-                    "--run-root", str(root / "asset/runs" / ("runpod_success_stopped_v2_" + role)),
-                    "--workers", "1", "--parallel-policies", "2"])
-                event("complete", status="complete")
-                while True:
-                    time.sleep(30)
-            for backbone in ("groot", "qwen3vl"):
-                run("patch_projection_check_" + backbone,
-                    [python, "-u", "scripts/verify_vision_patch_projection.py",
-                     "--dataset", role, "--backbone", backbone,
-                     "--output", str(status_dir / ("patch_parity_" + backbone + ".json"))])
-            run("throughput_check", [python, "-u", "scripts/profile_online_training.py",
-                "--dataset", role, "--backbone", "groot", "--repeats", "2", "--workers", "2",
-                "--output-json", str(status_dir / "profile_optimized.json")])
-            profile = json.loads((status_dir / "profile_optimized.json").read_text())
-            slowest = max(row["optimizer_step_wall_s"] for row in profile["updates"])
-            if slowest > payload.get("maximum_pilot_step_seconds", 10):
-                raise RuntimeError("Diagnostic throughput gate failed before long training: " + str(slowest))
-            if payload.get("train_after_checks"):
-                run("pipeline_pilot", [python, "-u", "scripts/runpod_online_pilot.py",
-                    "--dataset", role, "--durable-root", str(durable)])
-                run("pilot_rollout_gate", [python, "-u", "scripts/wait_for_pilot_rollouts.py",
-                    "--dataset", role, "--durable-root", str(durable)])
-                run("success_study", [python, "-u", "scripts/runpod_success_study.py",
-                    "--dataset", role, "--durable-root", str(durable),
-                    "--workers", "1", "--parallel-policies", "2"])
+                "tests.test_checkpoint_io", "tests.test_runpod_success_study", "-v"])
+            # Check encoder parity on the first real batch, then train directly.
+            run("success_study", [python, "-u", "scripts/runpod_success_study.py",
+                "--dataset", role, "--durable-root", str(durable),
+                "--run-root", str(root / "asset/runs" / ("runpod_success_stopped_v3_" + role)),
+                "--workers", "1", "--parallel-policies", "2"])
         event("complete", status="complete")
     except BaseException as exc:
         event("failed", status="failed", error_type=type(exc).__name__, error=str(exc),

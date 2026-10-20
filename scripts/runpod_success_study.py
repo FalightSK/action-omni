@@ -408,7 +408,8 @@ def main(argv: list[str] | None = None) -> int:
     run_root.mkdir(parents=True, exist_ok=True)
     study_id = run_root.name
     code_paths = ["scripts/runpod_success_study.py", "scripts/success_queue.py",
-                  "scripts/success_stopping.py", "scripts/train.py", "scripts/online_encoder.py",
+                  "scripts/success_stopping.py", "scripts/train.py", "scripts/checkpoint_io.py",
+                  "scripts/online_encoder.py",
                   "scripts/runpod_eval_worker.py", "scripts/evaluate.py", "scripts/eval_libero.py",
                   "scripts/setup_runpod_eval.sh", "scripts/stage_runpod_assets.py",
                   "scripts/analysis/paired_results.py", "scripts/analysis/runpod_paper_results.py",

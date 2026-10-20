@@ -1,7 +1,7 @@
 # Action-Omni team walkthrough and continuity guide
 
 > **Current operations notice (20 October 2026):** Production RunPod actions are
-> MCP-only and use `scripts/runpod_bootstrap.py` with the v2
+> MCP-only and use `scripts/runpod_bootstrap.py` with the v3
 > `scripts/runpod_success_study.py` runner. SSH/nohup commands and the older
 > update-matched study details below are historical notes, not current launch
 > instructions.

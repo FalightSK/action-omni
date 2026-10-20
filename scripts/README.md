@@ -1,7 +1,7 @@
 # Commands
 
 > **Current production RunPod operations:** launch through the MCP-only
-> `scripts/runpod_bootstrap.py` workflow and the v2
+> `scripts/runpod_bootstrap.py` workflow and the v3
 > `scripts/runpod_success_study.py` runner. The SSH-based procedures and the
 > fixed-update runner below are historical guidance, not current launch
 > instructions.
