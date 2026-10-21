@@ -35,6 +35,7 @@ flow-matching target harder for no benefit.
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 import h5py
 import numpy as np
@@ -62,6 +63,7 @@ def task_language(fname: str) -> str:
 # package chain (data/__init__ -> pusht -> av, which the simulator env lacks).
 # Both sides therefore run the same code rather than two copies that can drift.
 from data.libero.frames import resize_frame  # noqa: E402,F401
+from scripts.run_log import log_event
 
 
 class LiberoDataset(Dataset):
@@ -84,16 +86,26 @@ class LiberoDataset(Dataset):
         self._lengths: dict[tuple[int, str], int] = {}
         ep = 0
         for fi, fp in enumerate(self.files):
+            file_started = time.perf_counter()
+            file_frames = 0
+            file_episodes = 0
+            log_event("data_collection.hdf5_scan_started", dataset="libero", file=fp.name,
+                      file_index=fi + 1, file_count=len(self.files), bytes=fp.stat().st_size)
             lang = task_language(fp.name)
             with h5py.File(fp, "r") as f:
                 for dname in sorted(f["data"], key=lambda s: int(s.split("_")[1])):
                     T = f["data"][dname]["actions"].shape[0]
                     self._lengths[(fi, dname)] = T
+                    file_frames += T
+                    file_episodes += 1
                     for t in range(T):
                         self.index.append((fi, dname, t))
                         self.episode_ids.append(ep)
                         self.task_texts.append(lang)
                     ep += 1
+            log_event("data_collection.hdf5_scan_complete", dataset="libero", file=fp.name,
+                      frames=file_frames, episodes=file_episodes,
+                      elapsed_s=round(time.perf_counter() - file_started, 3))
         self.episode_ids = np.asarray(self.episode_ids, dtype=np.int64)
         self.n_episodes = ep
         self._handles: dict[int, h5py.File] = {}

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import os
 from pathlib import Path
 import sys
 
@@ -14,11 +16,68 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from configs.registry import get_config
-from experiment_protocol import write_json
+def plot_run_losses(run_dir: Path) -> Path | None:
+    """Write one per-policy train/validation curve from its epoch history.
+
+    Success-stopping histories also contain rollout-only rows, and a resumed
+    run may repeat an epoch. Ignore rows without both losses and keep the last
+    valid loss row for each epoch.
+    """
+    run_dir = Path(run_dir)
+    history = run_dir / "history.jsonl"
+    if not history.is_file():
+        return None
+
+    by_epoch: dict[int, tuple[float, float]] = {}
+    with history.open("r", encoding="utf-8") as stream:
+        for line in stream:
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                # A live reader may observe the final JSONL append mid-write.
+                continue
+            if not isinstance(row, dict) or not {"epoch", "train_loss", "validation_loss"}.issubset(row):
+                continue
+            try:
+                epoch = int(row["epoch"])
+                train_loss = float(row["train_loss"])
+                validation_loss = float(row["validation_loss"])
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if epoch < 0 or not math.isfinite(train_loss) or not math.isfinite(validation_loss):
+                continue
+            by_epoch[epoch] = (train_loss, validation_loss)
+
+    if not by_epoch:
+        return None
+
+    epochs = sorted(by_epoch)
+    train_losses = [by_epoch[epoch][0] for epoch in epochs]
+    validation_losses = [by_epoch[epoch][1] for epoch in epochs]
+    fig, ax = plt.subplots(figsize=(8, 4.5), constrained_layout=True)
+    ax.plot(epochs, train_losses, label="Train", linewidth=1.5)
+    ax.plot(epochs, validation_losses, label="Validation", linewidth=1.8)
+    ax.set(title=f"{run_dir.parent.name} / {run_dir.name}: training and validation loss",
+           xlabel="Epoch", ylabel="Flow-matching loss")
+    ax.grid(True, alpha=0.25)
+    ax.legend()
+
+    output = run_dir / "training_curve.png"
+    temporary = output.with_name(output.name + f".{os.getpid()}.tmp")
+    try:
+        fig.savefig(temporary, format="png", dpi=160)
+        os.replace(temporary, output)
+    finally:
+        plt.close(fig)
+        if temporary.exists():
+            temporary.unlink()
+    return output
 
 
 def main() -> None:
+    from configs.registry import get_config
+    from experiment_protocol import write_json
+
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--plan", type=Path, default=ROOT / "configs/runpod_update_matched_study.json")
     ap.add_argument("--run-root", type=Path, default=ROOT / "asset/runs/runpod_update_matched_v1")

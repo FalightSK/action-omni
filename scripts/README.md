@@ -1,5 +1,11 @@
 # Commands
 
+> **RunPod experiment workflow:** launch through the MCP-only
+> `scripts/runpod_bootstrap.py` workflow and the v3
+> `scripts/runpod_success_study.py` runner. The SSH-based procedures and the
+> fixed-update runner below are historical guidance, not current launch
+> instructions.
+
 Run commands from the repository root. Root-level scripts locate that root with
 `Path(__file__).resolve().parents[1]`; scripts one directory deeper use `parents[2]`.
 Shared runtime code belongs in `models/`, `data/`, `envs/`, and `configs/`.
@@ -8,12 +14,17 @@ Shared runtime code belongs in `models/`, `data/`, `envs/`, and `configs/`.
 
 | Command | Purpose |
 |---|---|
-| `run_experiment.py` | Reuse/build a validated shared cache, then resume/train one seed. |
-| `runpod_update_matched_study.py` | Execute the update-matched RunPod study; deploy one dataset worker per Pod. |
+| `runpod_success_study.py` | Online or cached training, development-success stopping, and durable checkpoint queue. |
+| `runpod_bootstrap.py`, `runpod_eval_worker.py` | MCP-configured Pod startup and shared simulation evaluation worker. |
+| `prepare_cached_study.py`, `check_cached_checkpoint.py` | Validate pinned feature caches and perform an isolated one-update checkpoint round trip. |
+| `runpod_queue_manager.py` | Optional local queue manager; `--dry-run` reports planned actions without changing Pods. |
+| `smoke_runpod_simulators.py` | Reset, step, and render checks for ALOHA and LIBERO simulators. |
+| `run_experiment.py` | Resume/train one seed with online encoding or a validated shared cache. |
+| `runpod_update_matched_study.py` | Historical fixed-update RunPod study. |
 | `run_study.py` | Earlier episode-holdout fixed-endpoint workflow; `--dry-run` prints commands only. |
 | `prepare_protocol.py` | Prepare episode splits and training-only statistics without a VLM. |
 | `precompute.py` | Cache frozen features (`--dataset --exp`). |
-| `train.py` | Train the adapter/action head on cached features. |
+| `train.py` | Train the adapter/action head; `--online-encoder` computes frozen VLM features per batch. |
 | `evaluate.py`, `eval_libero.py` | Closed-loop policy evaluation. |
 | `offline_eval.py` | Historical open-loop evaluation. |
 | `validate_harness.py`, `validate_harness_aloha.py` | Simulator harness checks. |
@@ -24,16 +35,17 @@ The [camera-ready workflow](../docs/CAMERA_READY.md) identifies the current opt-
 protocol and deferred experiment commands. Historical entrypoints do not
 constitute revised experiment results.
 
-The current update-matched RunPod workers are launched with
-`scripts/runpod_update_matched_study.py`, one dataset per Pod. For their locked
-plan, current run roots, live status commands, recovery procedure, and required
-cross-Pod final analysis, use the [team continuity guide](../docs/team_continuity_guide.md).
+The earlier update-matched RunPod workers used
+`scripts/runpod_update_matched_study.py`, one dataset per Pod. For the current
+success-stopped study and its operational notes, see the [protocol](../docs/RUNPOD_SUCCESS_STOPPED_PROTOCOL.md)
+and [team continuity guide](../docs/team_continuity_guide.md).
 
 The `configs/camera_ready_study.json` and `scripts/run_study.py` instructions
-below belong to the earlier episode-holdout workflow. Do not use them to launch
-the active update-matched RunPod matrix; its locked configuration and operating
-instructions are in `configs/runpod_update_matched_study.json` and the
-[team continuity guide](../docs/team_continuity_guide.md).
+below belong to the earlier episode-holdout workflow. The active success-stopped
+online configuration is `configs/runpod_success_stopped_study.json`. Cached training
+uses `configs/runpod_cached_success_study.json`; fresh head initialization with
+pinned cache reuse uses `configs/runpod_fresh_cached_success_study.json`. Their
+protocol is linked above.
 
 ## One full experiment
 

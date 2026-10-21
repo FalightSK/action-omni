@@ -21,6 +21,8 @@ transferred to the left gripper and lifted) is success, and the env terminates.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from pathlib import Path
 
@@ -156,6 +158,28 @@ def annotate_frame(frame, ep, total_eps, step, max_steps, reward, max_reward, su
     return np.array(img.convert("RGB"))
 
 
+def _mujoco_state_sha256(data) -> str:
+    """Fingerprint the complete exposed integration state before policy action."""
+    digest = hashlib.sha256()
+    for name in ("time", "qpos", "qvel", "act", "ctrl", "mocap_pos",
+                 "mocap_quat", "userdata", "qacc_warmstart", "qfrc_applied",
+                 "xfrc_applied"):
+        if not hasattr(data, name):
+            continue
+        value = np.asarray(getattr(data, name))
+        header = json.dumps((name, value.shape, value.dtype.str),
+                            separators=(",", ":")).encode("utf-8")
+        digest.update(len(header).to_bytes(4, "little"))
+        digest.update(header)
+        digest.update(np.ascontiguousarray(value).tobytes())
+    return digest.hexdigest()
+
+
+def _observation_image_sha256(frame) -> str:
+    image = np.ascontiguousarray(np.asarray(frame))
+    return hashlib.sha256(image.tobytes()).hexdigest()
+
+
 def run_episode(env, agent, cfg, ep_idx, total_eps, save_video, video_dir,
                 seed_offset: int = 0, trace: bool = False, policy_seed=None):
     """Run one gym_aloha episode. Returns a result dict.
@@ -170,6 +194,9 @@ def run_episode(env, agent, cfg, ep_idx, total_eps, save_video, video_dir,
     """
     environment_seed = (ep_idx + seed_offset) * 137 + 42
     obs, _ = env.reset(seed=environment_seed)
+    physics = env.unwrapped._env.physics
+    initial_state_sha256 = _mujoco_state_sha256(physics.data)
+    initial_observation_sha256 = _observation_image_sha256(obs["pixels"]["top"])
     if policy_seed is not None:
         from experiment_protocol import seed_everything
         seed_everything(policy_seed)
@@ -225,6 +252,9 @@ def run_episode(env, agent, cfg, ep_idx, total_eps, save_video, video_dir,
     out = {
         "episode": ep_idx + 1,
         "initial_state_id": ep_idx + seed_offset,
+        "initial_state_sha256": initial_state_sha256,
+        "initial_state_kind": "gym_aloha_mujoco_state_v1",
+        "initial_observation_sha256": initial_observation_sha256,
         "environment_seed": environment_seed,
         "policy_sampling_seed": policy_seed,
         "termination_reason": ("success" if success else "terminated" if terminated

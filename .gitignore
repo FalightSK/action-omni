@@ -35,6 +35,9 @@ Thumbs.db
 # ── Logs / temp ───────────────────────────────────────────────────────────────
 /tmp/
 *.log
+/.runpod-queue-manager-state.json
+/.runpod-queue-manager.log.jsonl
+/configs/runpod_pods.json
 
 # ── AI agent artifacts (never commit) ────────────────────────────────────────
 # Claude Code memory, rules, and session files — not part of the codebase

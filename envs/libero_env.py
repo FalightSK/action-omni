@@ -44,6 +44,8 @@ policy will look broken
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import sys
 from pathlib import Path
@@ -81,6 +83,34 @@ CAMERA = "agentview_image"          # live env key; the HDF5 calls it agentview_
 # is stored as eye_in_hand_rgb in the demo HDF5. Guessing this wrong would feed
 # the policy the exterior view twice and look like a modelling failure.
 CAMERA_WRIST = "robot0_eye_in_hand_image"
+
+
+def _mujoco_state_sha256(data) -> str:
+    """Fingerprint the exposed MuJoCo integration state at episode start."""
+    digest = hashlib.sha256()
+    for name in ("time", "qpos", "qvel", "act", "ctrl", "mocap_pos",
+                 "mocap_quat", "userdata", "qacc_warmstart", "qfrc_applied",
+                 "xfrc_applied"):
+        if not hasattr(data, name):
+            continue
+        value = np.asarray(getattr(data, name))
+        header = json.dumps((name, value.shape, value.dtype.str),
+                            separators=(",", ":")).encode("utf-8")
+        digest.update(len(header).to_bytes(4, "little"))
+        digest.update(header)
+        digest.update(np.ascontiguousarray(value).tobytes())
+    return digest.hexdigest()
+
+
+def _array_sha256(value) -> str:
+    array = np.ascontiguousarray(np.asarray(value))
+    header = json.dumps((array.shape, array.dtype.str),
+                        separators=(",", ":")).encode("utf-8")
+    digest = hashlib.sha256()
+    digest.update(len(header).to_bytes(4, "little"))
+    digest.update(header)
+    digest.update(array.tobytes())
+    return digest.hexdigest()
 
 
 def build_state(obs: dict) -> np.ndarray:
@@ -237,6 +267,17 @@ def run_episode(env, agent, cfg, instruction: str, seed: int,
         for _ in range(5):
             obs, _r, _d, _i = env.step(settle)
 
+    # Capture after the protocol's existing initial-state install and settling,
+    # immediately before the first policy action. No extra physics step occurs.
+    initial_state_sha256 = _mujoco_state_sha256(env.sim.data)
+    initial_observation = np.asarray(obs[CAMERA])
+    initial_observation_sha256 = _array_sha256(initial_observation)
+    initial_state_kind = ("libero_mujoco_state_after_init_and_settle5_v1"
+                          if init_state is not None else
+                          "libero_mujoco_state_after_random_reset_v1")
+    libero_init_state_sha256 = (_array_sha256(init_state)
+                                if init_state is not None else None)
+
     frames: list[np.ndarray] = []
     success, steps = False, 0
     gripper_changes, max_disp = 0, 0.0
@@ -265,6 +306,10 @@ def run_episode(env, agent, cfg, instruction: str, seed: int,
 
     return {
         "success": success,
+        "initial_state_sha256": initial_state_sha256,
+        "initial_state_kind": initial_state_kind,
+        "initial_observation_sha256": initial_observation_sha256,
+        "libero_init_state_sha256": libero_init_state_sha256,
         "steps": steps,
         "replans": agent.replan_count,
         "gripper_changes": gripper_changes,

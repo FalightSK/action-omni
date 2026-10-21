@@ -90,4 +90,4 @@ class AlohaExp05GrootTransfer(AlohaExp01):
     # 200 matches the LIBERO protocol and brings SE to ~3.4 pts.
     sim_episodes: int = 200
 
-    embed_batch_size: int = 32
+    embed_batch_size: int = 64

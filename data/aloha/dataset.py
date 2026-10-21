@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import glob
 from pathlib import Path
+import time
 
 import av
 import numpy as np
@@ -30,6 +31,7 @@ from torch.utils.data import Dataset
 
 # Re-export the generic embedding dataset under an ALOHA name.
 from data.pusht.dataset import PushTEmbeddingDataset as AlohaEmbeddingDataset  # noqa: F401
+from scripts.run_log import log_event
 
 
 def resize_frame(rgb_uint8: np.ndarray, width: int, height: int) -> Image.Image:
@@ -112,8 +114,21 @@ class AlohaDataset(Dataset):
         shards = sorted(glob.glob(str(root / "data" / "chunk-000" / "file-*.parquet")))
         if not shards:
             raise FileNotFoundError(f"No data shards under {root/'data'/'chunk-000'}")
-        df = pd.concat([pd.read_parquet(f) for f in shards], ignore_index=True)
+        parquet_started = time.perf_counter()
+        log_event("data_collection.parquet_load_started", dataset="aloha", shards=len(shards))
+        frames = []
+        for index, shard in enumerate(shards, start=1):
+            shard_started = time.perf_counter()
+            frame = pd.read_parquet(shard)
+            frames.append(frame)
+            log_event("data_collection.parquet_shard_loaded", dataset="aloha",
+                      shard=Path(shard).name, shard_index=index, shard_count=len(shards),
+                      rows=len(frame), bytes=Path(shard).stat().st_size,
+                      elapsed_s=round(time.perf_counter() - shard_started, 3))
+        df = pd.concat(frames, ignore_index=True)
         df = df.sort_values("index").reset_index(drop=True)
+        log_event("data_collection.parquet_load_complete", dataset="aloha", frames=len(df),
+                  elapsed_s=round(time.perf_counter() - parquet_started, 3))
 
         self.states  = np.asarray(df["observation.state"].tolist(), dtype=np.float32)  # (N,14)
         self.actions = np.asarray(df["action"].tolist(),            dtype=np.float32)  # (N,14)
@@ -126,7 +141,12 @@ class AlohaDataset(Dataset):
         if not vids:
             raise FileNotFoundError(
                 f"No mp4 under {root/'videos'/config.camera_key/'chunk-000'}")
+        log_event("data_collection.video_open_started", dataset="aloha", video=Path(vids[0]).name,
+                  bytes=Path(vids[0]).stat().st_size)
+        video_started = time.perf_counter()
         self._reader = _SequentialFrameReader(vids[0])
+        log_event("data_collection.video_open_complete", dataset="aloha",
+                  elapsed_s=round(time.perf_counter() - video_started, 3))
 
         print(f"  AlohaDataset: {self.N:,} frames | state{self.states.shape[1]}D "
               f"action{self.actions.shape[1]}D | img {self.img_w}x{self.img_h}")

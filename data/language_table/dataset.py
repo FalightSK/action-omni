@@ -24,6 +24,7 @@ from __future__ import annotations
 import glob
 import io
 from pathlib import Path
+import time
 
 import numpy as np
 import pandas as pd
@@ -33,6 +34,7 @@ from torch.utils.data import Dataset
 
 # Re-export the generic embedding dataset under a Language Table name.
 from data.pusht.dataset import PushTEmbeddingDataset as LanguageTableEmbeddingDataset  # noqa: F401
+from scripts.run_log import log_event
 
 
 def resize_frame(rgb_uint8: np.ndarray, width: int, height: int) -> Image.Image:
@@ -73,8 +75,21 @@ class LanguageTableDataset(Dataset):
         shards = sorted(glob.glob(str(root / "data" / "chunk-000" / "file-*.parquet")))
         if not shards:
             raise FileNotFoundError(f"No data shards under {root/'data'/'chunk-000'}")
-        df = pd.concat([pd.read_parquet(f) for f in shards], ignore_index=True)
+        scan_started = time.perf_counter()
+        log_event("data_collection.parquet_load_started", dataset="language_table", shards=len(shards))
+        frames = []
+        for index, shard in enumerate(shards, start=1):
+            shard_started = time.perf_counter()
+            frame = pd.read_parquet(shard)
+            frames.append(frame)
+            log_event("data_collection.parquet_shard_loaded", dataset="language_table",
+                      shard=Path(shard).name, shard_index=index, shard_count=len(shards),
+                      rows=len(frame), bytes=Path(shard).stat().st_size,
+                      elapsed_s=round(time.perf_counter() - shard_started, 3))
+        df = pd.concat(frames, ignore_index=True)
         df = df.sort_values("index").reset_index(drop=True)
+        log_event("data_collection.parquet_load_complete", dataset="language_table", frames=len(df),
+                  elapsed_s=round(time.perf_counter() - scan_started, 3))
 
         self.states       = np.asarray(df["observation.state"].tolist(), dtype=np.float32)  # (N,2)
         self.actions      = np.asarray(df["action"].tolist(),            dtype=np.float32)  # (N,2)

@@ -1,0 +1,141 @@
+{
+  "schema": 2,
+  "name": "runpod_success_stopped_v1",
+  "purpose": "Prospective frozen-backbone VLA replication with simulation-based development selection; distinct from submitted and fixed-update protocols",
+  "training_seeds": [
+    3,
+    4,
+    5
+  ],
+  "backbones": {
+    "groot": "exp05",
+    "qwen3vl": "exp06"
+  },
+  "feature_mode": "cached",
+  "trainable_modules": [
+    "token_adapter",
+    "action_decoder"
+  ],
+  "frozen_modules": [
+    "vision_language_backbone"
+  ],
+  "effective_batch_size": 128,
+  "reference_optimizer_updates": 53760,
+  "warmup_updates": 5376,
+  "minimum_learning_rate_ratio": 0.01,
+  "lr_schedule": "warmup_cosine_to_reference_update_then_constant_floor",
+  "checkpoint_rule": "highest_development_success_rate_earliest_tie",
+  "primary_comparison_family_size": 6,
+  "stopping": {
+    "metric": "development_success_rate",
+    "minimum_epochs": 100,
+    "evaluation_every_epochs": 10,
+    "patience_epochs": 30,
+    "minimum_improvement": 0.0,
+    "maximum_epochs": null,
+    "evaluation_wait_timeout_seconds": 7200,
+    "evaluation_poll_seconds": 15
+  },
+  "scene_split": {
+    "definition": "Disjoint development and final simulator reset cohorts on the same trained tasks; not unseen-task generalization",
+    "demonstration_scene_absence_verified": false,
+    "limitation": "ALOHA demonstrations do not expose original cube poses or reset seeds; no claim that every final pose is absent from the demonstration corpus"
+  },
+  "source_revisions": {
+    "groot": {
+      "repo_id": "nvidia/GR00T-N1.7-3B",
+      "revision": "2fc962b973bccdd5d8ce4f67cc63b264d6886495"
+    },
+    "groot_tokenizer": {
+      "repo_id": "nvidia/Cosmos-Reason2-2B",
+      "revision": "9ce19a195e423419c349abfc86fd07178b230561"
+    },
+    "qwen3vl": {
+      "repo_id": "Qwen/Qwen3-VL-2B-Instruct",
+      "revision": "89644892e4d85e24eaac8bacfd4f463576704203"
+    },
+    "aloha_dataset": {
+      "repo_id": "lerobot/aloha_sim_transfer_cube_human",
+      "revision": "6a43d500f101255823a9d2b9dc244eeb01a2cd31"
+    },
+    "libero_dataset": {
+      "repo_id": "yifengzhu-hf/LIBERO-datasets",
+      "revision": "f13aa24a3da8c43c7225569f28c562979fa0e35a"
+    }
+  },
+  "datasets": {
+    "aloha": {
+      "split_manifest": "asset/protocols/aloha/97fa699cb307366377cec2eb0f29795d967710f9ffe0fea9d1e1c50108b8d537.json",
+      "steps_per_epoch": 140,
+      "reference_epochs": 384,
+      "camera_views": [
+        "top"
+      ],
+      "development_evaluation": {
+        "episodes": 50,
+        "seed_offset": 20000,
+        "render_samples": 0,
+        "videos": false,
+        "capture_trajectory": false
+      },
+      "final_evaluation": {
+        "episodes": 200,
+        "seed_offset": 10000,
+        "render_samples": 0,
+        "videos": false,
+        "capture_trajectory": true
+      }
+    },
+    "libero": {
+      "split_manifest": "asset/protocols/libero/4d1d6267e4270ac86caf491ea9b5fb630eb0e3a8a728822f96e94be9b3e3b0ad.json",
+      "steps_per_epoch": 448,
+      "reference_epochs": 120,
+      "camera_views": [
+        "agentview",
+        "robot0_eye_in_hand"
+      ],
+      "development_evaluation": {
+        "episodes_per_task": 10,
+        "initial_state_offset": 0,
+        "tasks": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "conditions": [
+          "canonical"
+        ],
+        "environment_seed": 0,
+        "videos": 0
+      },
+      "final_evaluation": {
+        "episodes_per_task": 40,
+        "initial_state_offset": 10,
+        "tasks": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9
+        ],
+        "conditions": [
+          "canonical"
+        ],
+        "environment_seed": 0,
+        "videos": 0
+      }
+    }
+  }
+}

@@ -1,5 +1,11 @@
 # Action-Omni team walkthrough and continuity guide
 
+> **Current operations notice (20 October 2026):** Production RunPod actions are
+> MCP-only and use `scripts/runpod_bootstrap.py` with the v3
+> `scripts/runpod_success_study.py` runner. SSH/nohup commands and the older
+> update-matched study details below are historical notes, not current launch
+> instructions.
+
 **Status snapshot:** 20 October 2026. The live Pod state below was checked during this session. Refresh it from the RunPod logs before making operational decisions.
 
 This guide is for a teammate picking up the experiment and manuscript work. The canonical protocol is [`configs/runpod_update_matched_study.json`](../configs/runpod_update_matched_study.json); the research decisions and camera-ready plan are in [`plan.md`](../plan.md). This guide explains how the running cloud jobs fit together, where their records live, and what remains after they finish.
