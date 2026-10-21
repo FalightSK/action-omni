@@ -68,23 +68,79 @@ def make_job(root: Path, index: int) -> dict:
 
 
 class RunpodSuccessStudyTests(unittest.TestCase):
-    def test_sync_tree_skips_durable_recovery_backups(self):
+    def test_sync_tree_skips_checkpoint_alias_and_recovery_in_both_directions(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[1]) as tmp:
             root = Path(tmp)
             source = root / "durable-run"
             destination = root / "local-run"
             source.mkdir()
             (source / "last.pt").write_bytes(b"mutable checkpoint")
+            (source / "checkpoints").mkdir()
+            (source / "checkpoints/last.pt").write_bytes(b"unreadable mutable alias")
+            (source / "checkpoints/best.pt").write_bytes(b"selected checkpoint")
             (source / "history.jsonl").write_text('{"epoch": 4}\n', encoding="utf-8")
             backup = source / ("recovery_e000004_r00000002_" + "a" * 64 + ".pt")
             backup.write_bytes(b"large immutable recovery backup")
 
-            copied = study.sync_tree(source, destination)
+            for origin, target in ((source, destination), (destination, root / "restored")):
+                copied = study.sync_tree(origin, target)
+                self.assertEqual(copied, 3)
+                self.assertTrue((target / "last.pt").is_file())
+                self.assertTrue((target / "history.jsonl").is_file())
+                self.assertTrue((target / "checkpoints/best.pt").is_file())
+                self.assertFalse((target / "checkpoints/last.pt").exists())
+                self.assertFalse((target / backup.name).exists())
 
-            self.assertEqual(copied, 2)
-            self.assertTrue((destination / "last.pt").is_file())
-            self.assertTrue((destination / "history.jsonl").is_file())
-            self.assertFalse((destination / backup.name).exists())
+    def test_fresh_jobs_reuse_v6_cache_identity_with_isolated_training_identity(self):
+        @dataclass
+        class Config:
+            vlm_backbone: str
+            output_dir: str
+            n_views: int = 1
+            batch_size: int = 1
+            num_epochs: int = 1
+            min_epochs: int = 0
+            warmup_steps: int = 0
+            min_lr_ratio: float = 0.0
+            lr_decay_epochs: int | None = 1
+            embeddings_cache: str = ""
+
+        plan_path = study.ROOT / "configs/runpod_fresh_cached_success_study.json"
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        study_id = "runpod_success_stopped_fresh_cached_v1_aloha"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            get_fake_config = lambda _dataset, experiment: Config(
+                "groot" if experiment == "exp05" else "qwen3vl",
+                f"asset/runs/aloha/{experiment}")
+            with patch.object(study, "get_config", side_effect=get_fake_config), \
+                 patch.object(study, "apply_normalization"), \
+                 patch.object(study, "prime_backbone_image_token_id"), \
+                 patch.object(study, "load_protocol", return_value={"protocol_id": "protocol"}), \
+                 patch.object(study, "source_assets", return_value={"weights": "sha"}), \
+                 patch.object(study, "run_signature", return_value="signature"), \
+                 patch.object(study, "validate_cached_cache", return_value={
+                     "cache_id": "cache-id", "sha256": "cache-sha"}) as validate, \
+                 patch.object(study.torch, "load", create=True,
+                              side_effect=AssertionError("Fresh startup loaded a checkpoint")):
+                jobs = study.build_jobs(plan, "aloha", root / study_id, 1,
+                                        plan_path, root / "durable")
+            self.assertEqual(len(jobs), 6)
+            self.assertEqual({job["training_seed"] for job in jobs}, {3, 4, 5})
+            self.assertEqual(len(validate.call_args_list), 2)
+            for call in validate.call_args_list:
+                self.assertEqual(call.kwargs["study_id"], "runpod_success_stopped_v6_aloha")
+                self.assertEqual(call.kwargs["plan_id"], plan["cache_source"]["plan_id"])
+                self.assertIn("runpod_success_stopped_v6_aloha", str(call.args[0]))
+                self.assertIn("runpod_success_stopped_v6_aloha", str(call.args[1]))
+            for job in jobs:
+                self.assertEqual(job["run"].relative_to(root).parts[0], study_id)
+                self.assertIn(study_id, job["durable_run"].parts)
+                command = job["command"]
+                self.assertEqual(command[command.index("--rollout-study-id") + 1], study_id)
+                self.assertEqual(command[command.index("--rollout-plan-id") + 1], study.digest(plan))
+                self.assertNotEqual(study.digest(plan), plan["cache_source"]["plan_id"])
+                self.assertNotIn("--fresh", command)
 
     def test_build_jobs_signs_resolved_backbone_image_token(self):
         @dataclass

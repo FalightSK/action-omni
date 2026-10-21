@@ -44,7 +44,7 @@ def atomic_copy_checkpoint(source: Path, destination: Path,
 
 
 def publish_recovery_revision(source: Path, directory: Path, epoch: int, revision: int) -> Path:
-    """Keep a verified immutable copy before updating the mutable last.pt alias."""
+    """Publish a verified SHA-addressed recovery file as the durable checkpoint."""
     checksum = file_sha256(source)
     target = Path(directory) / f"recovery_e{epoch:06d}_r{revision:08d}_{checksum}.pt"
     if not target.is_file() or file_sha256(target) != checksum:

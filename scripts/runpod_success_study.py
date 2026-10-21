@@ -26,6 +26,7 @@ from experiment_protocol import (apply_normalization, cache_config, digest, enco
                                  file_digest, load_protocol, protocol_arrays, run_signature,
                                  source_assets, write_json)
 from scripts.run_log import log_event, write_json_atomic
+from scripts.runpod_bootstrap import cache_source_for_plan
 from scripts.success_queue import publish_rollout_task
 
 
@@ -79,6 +80,7 @@ def build_jobs(plan: dict, dataset: str, run_root: Path, workers: int,
     protocol_path = ROOT / setting["split_manifest"]
     protocol = load_protocol(protocol_path, dataset)
     study_id = run_root.name
+    cache_study_id, cache_plan_id, _ = cache_source_for_plan(plan, dataset, study_id, ROOT)
     validated_caches: dict[Path, dict] = {}
     for seed in plan["training_seeds"]:
         for experiment in (plan["backbones"]["groot"], plan["backbones"]["qwen3vl"]):
@@ -102,15 +104,15 @@ def build_jobs(plan: dict, dataset: str, run_root: Path, workers: int,
                            / run.relative_to(run_root))
             cache_path = None
             if feature_mode == "cached":
-                cache_path = (ROOT / "asset/cache/cached_success_study" / study_id / dataset
+                cache_path = (ROOT / "asset/cache/cached_success_study" / cache_study_id / dataset
                               / experiment / "vlm_embeddings.h5").resolve()
                 cfg.embeddings_cache = str(cache_path)
-                durable_cache = (durable_root / "success_studies" / study_id / "feature_caches"
+                durable_cache = (durable_root / "success_studies" / cache_study_id / "feature_caches"
                                  / dataset / experiment / "vlm_embeddings.h5").resolve()
                 if cache_path not in validated_caches:
                     validated_caches[cache_path] = validate_cached_cache(
                         cache_path, durable_cache, dataset=dataset, experiment=experiment,
-                        backbone=cfg.vlm_backbone, study_id=study_id, plan_id=digest(plan),
+                        backbone=cfg.vlm_backbone, study_id=cache_study_id, plan_id=cache_plan_id,
                         protocol=protocol, cfg=cfg, locked_source_assets=assets)
             run_cfg = json.loads(json.dumps({**asdict(cfg), "output_dir": str(run)}))
             command = [sys.executable, "-u", str(ROOT / "scripts/train.py"),
@@ -265,8 +267,10 @@ def sync_tree(source: Path, destination: Path) -> int:
         return 0
     copied = 0
     for path in source.rglob("*"):
-        if path.is_file() and not path.name.startswith("recovery_e"):
-            copied += int(sync_file(path, destination / path.relative_to(source)))
+        relative = path.relative_to(source)
+        if (path.is_file() and not path.name.startswith("recovery_e")
+                and relative.as_posix() != "checkpoints/last.pt"):
+            copied += int(sync_file(path, destination / relative))
     return copied
 
 
@@ -559,6 +563,7 @@ def main(argv: list[str] | None = None) -> int:
     code_paths = ["scripts/runpod_success_study.py", "scripts/success_queue.py",
                   "scripts/success_stopping.py", "scripts/train.py", "scripts/checkpoint_io.py",
                   "scripts/online_encoder.py", "scripts/plot_study_losses.py",
+                  "scripts/runpod_bootstrap.py",
                   "scripts/runpod_eval_worker.py", "scripts/evaluate.py", "scripts/eval_libero.py",
                   "scripts/setup_runpod_eval.sh", "scripts/stage_runpod_assets.py",
                   "scripts/analysis/paired_results.py", "scripts/analysis/runpod_paper_results.py",

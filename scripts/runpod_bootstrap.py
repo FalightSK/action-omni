@@ -26,6 +26,35 @@ def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def cache_source_for_plan(plan: dict, dataset: str, study_id: str,
+                          root: Path) -> tuple[str, str, Path | None]:
+    """Keep reused cache provenance separate from a fresh training namespace."""
+    def plan_digest(value):
+        return sha(json.dumps(value, sort_keys=True, separators=(",", ":"),
+                              allow_nan=False).encode())
+
+    source = plan.get("cache_source")
+    if plan.get("initialization") != "fresh":
+        if source is not None:
+            raise ValueError("Cache source override requires fresh initialization")
+        return study_id, plan_digest(plan), None
+    expected_source = {
+        "study_prefix": "runpod_success_stopped_v6_",
+        "plan_id": "a34bb34e8023bd4d532c62789da3471ae7f9f2d68dfcc1ee22221d80e8ba7907",
+        "plan": "configs/runpod_cached_success_study.json",
+    }
+    if (source != expected_source or plan.get("feature_mode") != "cached"
+            or study_id != "runpod_success_stopped_fresh_cached_v1_" + dataset):
+        raise ValueError("Fresh cached study requires its isolated namespace and pinned cache source")
+    source_path = root / source["plan"]
+    source_plan = json.loads(source_path.read_text(encoding="utf-8"))
+    scientific_plan = {key: value for key, value in plan.items()
+                       if key not in {"initialization", "cache_source"}}
+    if (plan_digest(source_plan) != source["plan_id"] or scientific_plan != source_plan):
+        raise ValueError("Fresh study changes the pinned cached scientific plan")
+    return source["study_prefix"] + dataset, source["plan_id"], source_path
+
+
 def canonical_archive(files: dict[str, bytes]) -> bytes:
     buffer = io.BytesIO()
     # Raw tar is deterministic across zlib versions on the caller/Pod hosts.
@@ -194,16 +223,30 @@ def main(payload: dict) -> None:
                 "tests.test_checkpoint_io", "tests.test_runpod_success_study",
                 "tests.test_plot_study_losses", "tests.test_prepare_cached_study",
                 "tests.test_runpod_bootstrap", "-v"])
-            plan_path = root / "configs/runpod_cached_success_study.json"
+            plan_path = (root / payload.get(
+                "plan_path", "configs/runpod_cached_success_study.json")).resolve()
+            if not plan_path.is_relative_to(root.resolve()):
+                raise ValueError("Training plan must remain inside the verified source checkout")
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            cache_study_id, _, cache_plan_path = cache_source_for_plan(
+                plan, role, study_id, root)
+            fresh = plan.get("initialization") == "fresh"
             run("gpu_layout_check", [python, "-c",
                 "import torch,json; assert torch.cuda.device_count()==1; "
                 "name=torch.cuda.get_device_name(0); "
                 "assert 'B300' in name; "
                 "print(json.dumps({'event':'bootstrap.gpu_layout_verified','name':name,"
                 "'memory_bytes':torch.cuda.get_device_properties(0).total_memory}))"])
+            if payload.get("checkpoint_check_first"):
+                if not fresh:
+                    raise ValueError("One-step checkpoint check requires fresh cached startup")
+                run("checkpoint_check", [python, "-u", "scripts/check_cached_checkpoint.py",
+                    "--dataset", role, "--durable-root", str(durable)])
             cache_command = [python, "-u", "scripts/prepare_cached_study.py",
-                "--dataset", role, "--durable-root", str(durable), "--study-id", study_id,
-                "--plan", str(plan_path)]
+                "--dataset", role, "--durable-root", str(durable), "--study-id", cache_study_id,
+                "--plan", str(cache_plan_path or plan_path)]
+            if fresh:
+                cache_command.append("--reuse-only")
             event("nvidia_smi_before_cacheprep", command=["nvidia-smi"])
             log_nvidia_smi_sample("before_cacheprep")
             sampler_stop = threading.Event()
@@ -220,9 +263,9 @@ def main(payload: dict) -> None:
                 sampler.join(timeout=12)
                 event("gpu_sampling_stopped", sampler_thread_alive=sampler.is_alive())
             migration = payload.get("preselection_migration")
-            if not migration:
+            if not migration and not fresh:
                 raise ValueError("Cached continuation requires its reviewed migration payload")
-            if migration:
+            if migration and not fresh:
                 migration_code = base64.b64decode(migration["base64"])
                 if sha(migration_code) != migration["sha256"]:
                     raise ValueError("Preselection continuation script SHA-256 mismatch")

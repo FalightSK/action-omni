@@ -1,6 +1,6 @@
 # Commands
 
-> **Current production RunPod operations:** launch through the MCP-only
+> **RunPod experiment workflow:** launch through the MCP-only
 > `scripts/runpod_bootstrap.py` workflow and the v3
 > `scripts/runpod_success_study.py` runner. The SSH-based procedures and the
 > fixed-update runner below are historical guidance, not current launch
@@ -14,8 +14,11 @@ Shared runtime code belongs in `models/`, `data/`, `envs/`, and `configs/`.
 
 | Command | Purpose |
 |---|---|
-| `runpod_success_study.py` | Current online training, development-success stopping, and durable checkpoint queue. |
+| `runpod_success_study.py` | Online or cached training, development-success stopping, and durable checkpoint queue. |
 | `runpod_bootstrap.py`, `runpod_eval_worker.py` | MCP-configured Pod startup and shared simulation evaluation worker. |
+| `prepare_cached_study.py`, `check_cached_checkpoint.py` | Validate pinned feature caches and perform an isolated one-update checkpoint round trip. |
+| `runpod_queue_manager.py` | Optional local queue manager; `--dry-run` reports planned actions without changing Pods. |
+| `smoke_runpod_simulators.py` | Reset, step, and render checks for ALOHA and LIBERO simulators. |
 | `run_experiment.py` | Resume/train one seed with online encoding or a validated shared cache. |
 | `runpod_update_matched_study.py` | Historical fixed-update RunPod study. |
 | `run_study.py` | Earlier episode-holdout fixed-endpoint workflow; `--dry-run` prints commands only. |
@@ -39,8 +42,10 @@ and [team continuity guide](../docs/team_continuity_guide.md).
 
 The `configs/camera_ready_study.json` and `scripts/run_study.py` instructions
 below belong to the earlier episode-holdout workflow. The active success-stopped
-configuration is `configs/runpod_success_stopped_study.json`; its protocol is
-linked above.
+online configuration is `configs/runpod_success_stopped_study.json`. Cached training
+uses `configs/runpod_cached_success_study.json`; fresh head initialization with
+pinned cache reuse uses `configs/runpod_fresh_cached_success_study.json`. Their
+protocol is linked above.
 
 ## One full experiment
 

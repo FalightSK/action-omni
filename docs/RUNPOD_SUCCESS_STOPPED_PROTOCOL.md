@@ -1,115 +1,100 @@
-# RunPod success-stopped study protocol / โปรโตคอลการศึกษา
+# RunPod success-stopped study protocol
 
-**Recovery incident, 2026-10-20 12:37 UTC:** Both ALOHA trainers exited during Cloud checkpoint publication; the Qwen traceback identifies `OSError: [Errno 34] Numerical result out of range` while hashing the mutable destination after its replacement. ALOHA was stopped through MCP; LIBERO's healthy second-cache encoding was left running. This is a storage read failure, not an observed GPU OOM. Last observed committed ALOHA recoveries were GR00T epoch 66 / step 9,240 and Qwen epoch 72 / step 10,080; newer files require fresh verification before being claimed as durable.
+This document describes the experiment workflow and its implementation. Measured
+results, checkpoints, run histories, and infrastructure status are stored separately.
 
-The recovery-only helper now restores a missing ephemeral study lock only from a durable lock matching the exact recomputed contract. Existing mismatched locks still fail. It uses the existing verified-checkpoint selector instead of loading mutable `last.pt` directly, preserves parent/audit/controller checks, and logs the selected checkpoint's fresh SHA, epoch, step and revision. Seven focused CPU regression tests passed. Frozen source archives, cache identities and scientific settings stay unchanged. A single controlled recovery is permitted; if the same storage failure recurs, stop the affected Pod and investigate storage before another retry. RunPod documents Global Volumes as eventually consistent object storage without atomic rename and recommends Network Volumes for frequent training checkpoint writes ([storage limitations](https://docs.runpod.io/storage/globalvolume/overview), [storage comparison](https://docs.runpod.io/storage/overview#compare-network-and-global-volumes)); these documents do not establish the cause of this specific errno.
+## Study plans and initialization
 
-ALOHA's recovery-only helper SHA-256 is `e93fa53b4be157d9e1d71cd29724a04197891d8043443a77bdb0ae14b33143ed`. Its exact reviewed startup command was configured and read back through MCP while stopped, then started once at 12:44:25.227 UTC. Optimizer continuation and new Cloud commits still require live verification. LIBERO's Qwen encoding finished and was copying its completed local cache to Cloud at 12:44 UTC; its healthy producer was not changed.
+- `configs/runpod_success_stopped_study.json` defines the online-encoder workflow.
+- `configs/runpod_cached_success_study.json` defines the cached-feature workflow.
+- `configs/runpod_fresh_cached_success_study.json` starts fresh adapter and decoder
+  weights while reusing the pinned cached-feature producer. The training namespace
+  is `runpod_success_stopped_fresh_cached_v1_<dataset>`; the cache producer namespace
+  remains `runpod_success_stopped_v6_<dataset>`.
 
-**Verified 2026-10-20 11:57 UTC:** ALOHA's corrected migration completed for both seed-3 arms, preserving the epoch-14 parent state. Both policies now execute real cached optimizer updates, completed epoch 16 / step 2,240 with loss validation, and committed immutable Cloud recovery checkpoints. GR00T recovery SHA-256: `c70f2bd3bd0d0bc69b1f554569d0b024d81c947278431ce3d1ca7ea926e660e7`; Qwen: `14a70a0d81420806cfb55f24db985cbe50df888f801e4d92f58e4eebb2ccedf9`. Both entered epoch 17. Observed steady training windows were about 0.19 seconds/update with two policies concurrent; this is production progress, not a standalone benchmark or a full-study speed guarantee. LIBERO's first cache reached 30,720/63,728 rows at batch 96; its second cache and migration remain pending. Evaluator remains stopped. Source and per-role helper identities are as recorded below; healthy runtimes remain frozen.
+`cache_source_for_plan` checks the cache producer plan digest and requires the fresh
+plan to preserve the scientific configuration. Cache reuse does not resume model,
+optimizer, scheduler, or random-number-generator state from an earlier study.
+Fresh startup uses `prepare_cached_study.py --reuse-only`; it does not encode
+replacement features when a required cache is unavailable or incompatible.
 
-## Runtime correction — 2026-10-20 11:42 UTC
+Both GR00T N1.7 (`exp05`) and Qwen3-VL (`exp06`) remain frozen. Training updates only
+the token adapter and action decoder. Training seeds are 3, 4, and 5. Backbones,
+tokenizers, datasets, and split manifests are pinned in the plan.
 
-**11:47 UTC recovery update:** The first source-guard correction passed its source checks, then exposed a second helper bug: the preparation report's actual six-field cache entries do not contain `experiment`. The helper now derives each arm from its verified manifest's durable path and validates the exact producer schema. Four CPU tests include an AST comparison with every dictionary return in the real cache producer, immutable-report reuse, reviewed trainer hashes and rejection of changed paths/source. ALOHA was stopped at this failure and restarted at 11:47:11.527 UTC with corrected helper SHA-256 `b0aa1693d7c5ce064d1126e6dab3093c161339f2a2c32b7c29beff5f5d756420`; source remains v12. The ALOHA Qwen Cloud cache was verified and copied at 11:43:52 UTC: SHA-256 `49b767fcad84dec7589179277f0025a31b79ad452ac43f57af04da9fc78bd97a`, 7,885,468,704 bytes. Both ALOHA caches are complete. LIBERO is encoding successfully with batch 96; its older embedded migration helper will receive this reviewed correction only if it fails after caching, preserving the healthy producer. Actual cached optimizer updates are still pending at this snapshot.
+## Training and selection
 
-This update supersedes the older bootstrap snapshot below. ALOHA completed both cache-preparation steps, then its migration helper rejected `scripts/train.py`: that file was explicitly allowed to change for cached-mode/token-identity handling, but a later guard incorrectly required byte equality. The failed Pod was stopped before recovery. The corrected helper accepts only the reviewed trainer hash transition (`68e74ec905b7c77c6998fa8d3bc5842aad5c881fc450255f1c8e7858848622a4` → `3eb9b31b4054b387c32d5e28c0aaea97afdbadc4475c355eefa760b1c93f0586`); encoder/model files still require byte equality. It also compares immutable preparation-report identity on restart, preserving the original report hash as history rather than rejecting changed timestamps. Checkpoint tensors, optimizer, scheduler, RNG, protocol and cache verification remain mandatory.
-
-The reviewed recovery implementation is now versioned in `scripts/migrate_cached_study.py`; its source pins cover both deployed archives. The exact embedded per-role helpers remain recorded separately in the local startup/status artifacts. Do not rebuild or restart a healthy runtime just to adopt the repository copy.
-
-| Role | Frozen source archive SHA-256 | Encoding batch | Embedded migration helper SHA-256 |
-|---|---|---:|---|
-| ALOHA, v12 | `3bebc75e3fe90c5848024518ce19b19e4f2e1f2a65b9310eff995174399b6819` | 64 | `3ea8963dae93e12c2f1574ad37ecf28a2ec324156174d2184a0f94a3588e805b` |
-| LIBERO, v13 | `37974c552993fe6fae68ebe412a2fa30857ab7fc0bbfc4964983787a3bb3a508` | 96 | `15bae468c93684840ea15ccf774b188341fe6cbecfd83c987a73722b997adcab` |
-
-The user authorized LIBERO encoding batch 48 → 96. V13 changes only that config number relative to v12; training effective batch stays 128. The authorized restart discarded the unfinished LIBERO GR00T local cache at 29,760/63,728 rows. No completed LIBERO cache was discarded. ALOHA keeps v12 and reuses its Cloud caches. ALOHA recovery started at 11:38:17.781 UTC; LIBERO v13 started at 11:39:53.235 UTC. As of this update ALOHA is verifying/copying cached files, and actual cached optimizer updates remain pending. Evaluator remains stopped. Three CPU regression tests and the exact-archive checks (12 training/encoder paths, six mutated-source rejections) passed; these are integrity checks, not GPU performance measurements.
-
-**TL;DR.** Cached v6 is booted on the existing training Pods. The v12 source archive is materialized locally (SHA-256 `3bebc75e3fe90c5848024518ce19b19e4f2e1f2a65b9310eff995174399b6819`; 268 files, 2,703,360 bytes), but cloud publication has not yet been observed. The completed v11 ALOHA `exp05` GR00T cache is verified and will be reused; v12 asset staging is underway, while new cache outputs and checkpoint migration remain pending. The 12-policy plan selects checkpoints on disjoint simulator development starts and reports once on reserved final starts. Confirmed seed-3 checkpoints remain available (ALOHA epoch 14/step 1,960; LIBERO epoch 2/step 896). Training and rollout results are **PENDING**; no paper results are available yet.
-
-**สรุปย่อ.** Cached v6 ทำงานบน training Pods เดิมแล้ว source archive v12 materialize ในเครื่องด้วย SHA-256 `3bebc75e3fe90c5848024518ce19b19e4f2e1f2a65b9310eff995174399b6819` (268 files, 2,703,360 bytes) แต่ยังไม่ยืนยันการเผยแพร่บน cloud cache ALOHA `exp05` GR00T จาก v11 เสร็จ ตรวจสอบแล้ว และจะนำกลับมาใช้ ส่วนการ stage assets ของ v12 กำลังทำอยู่ ขณะที่ cache outputs ใหม่และ migration checkpoint ยังรอดำเนินการ แผน 12 policy เลือก checkpoint จาก initial states ชุด development ที่แยกกัน และรายงานครั้งเดียวบนชุด final checkpoint seed 3 ที่ยืนยันแล้วยังคงพร้อมใช้ (ALOHA epoch 14/step 1,960; LIBERO epoch 2/step 896) ผล training และ rollout ยังเป็น **PENDING**
-
-## Locked design / แบบแผนที่ล็อกไว้
-
-Configured source of truth: [`runpod_cached_success_study.json`](../configs/runpod_cached_success_study.json), plan ID `a34bb34e8023bd4d532c62789da3471ae7f9f2d68dfcc1ee22221d80e8ba7907`. Once cache staging completes, the two endpoints (GR00T N1.7 `exp05`, Qwen3-VL `exp06`) will use verified, precomputed frozen-backbone image features. The vision-language backbone is frozen; only the token adapter and action decoder train. This is a deliberate transition from the historical online-encoding v9 workflow; the intended model inputs, raw data, and encoder revision remain the same. Each benchmark/backbone combination is trained with seeds 3, 4, and 5: 12 policies total, with six policies per training lane.
-
-แผนที่ตั้งค่าไว้คือ config cached ข้างต้นและ plan ID ที่ระบุ เมื่อ stage cache เสร็จแล้วจะใช้ image features ที่ precompute และตรวจสอบ โมเดล vision-language ถูก freeze และฝึกเฉพาะ token adapter กับ action decoder นี่เป็นการเปลี่ยนจาก workflow online-encoding v9 ในอดีต โดยตั้งใจคง model inputs, raw data และ encoder revision เดิม
-
-| Item | ALOHA Transfer Cube | LIBERO Goal |
+| Setting | ALOHA Transfer Cube | LIBERO Goal |
 |---|---|---|
-| Training steps per reference epoch | 140 | 448 |
-| LR reference geometry | 384 epochs = 53,760 updates | 120 epochs = 53,760 updates |
-| Development cohort | 50 episodes; seed offset 20,000 | 10 fixed starts per task; IDs 0–9 |
-| Final cohort | 200 episodes; seed offset 10,000 | 40 fixed starts per task; IDs 10–49 |
-| Tasks / views | Transfer Cube; top camera | Same 10 Goal tasks (IDs 0–9); canonical condition; agentview + wrist |
-| Final rollouts per policy | 200 | 400 (40 × 10 tasks) |
+| Reference steps per epoch | 140 | 448 |
+| Effective batch size | 128 | 128 |
+| Development cohort | 50 episodes, reset seeds 20000-20049 | 10 starts per task, IDs 0-9 |
+| Final cohort | 200 episodes, reset seeds 10000-10199 | 40 starts per task, IDs 10-49 |
+| Tasks and cameras | Transfer Cube, top camera | 10 Goal tasks, agentview and wrist |
+| Final episodes per policy | 200 | 400 |
 
-The recorded CPU-generated LIBERO cohort audit hashes all 500 official initial-state vectors across the same ten Goal tasks (source commit `8f1084e3132a39270c3a13ebe37270a43ece2a01`): development IDs 0–9 and final IDs 10–49 are disjoint both by ID and by vector hash within each task. ALOHA uses disjoint reset-seed ranges and records actual simulator-state hashes for paired-rollout auditing. ALOHA demonstrations do not expose original cube poses or reset seeds, so absence of final ALOHA poses from demonstration scenes is **not verified and will not be claimed**. Audit outputs were generated locally outside Git and have not been uploaded or checked into this repository. `scripts/prepare_simulation_cohorts.py` generates the cohort manifest at `asset/simulation_cohorts.json`; the generated audit files are local evidence, not links to repository files.
+The learning-rate schedule uses 5376 warmup updates, cosine decay to the 53760-update
+reference point, then a constant floor at 0.01 of peak LR. The reference point is
+not a maximum training budget. Development evaluation starts at epoch 100 and then
+runs every 10 epochs. Patience is 30 elapsed training epochs without a strict
+improvement, with no maximum epoch cap. Select the highest development success rate
+and retain the earliest checkpoint on ties.
 
-ผล audit cohort ของ LIBERO ที่บันทึกไว้ hash initial-state vectors อย่างเป็นทางการครบ 500 ชุดใน 10 Goal tasks เดิม (source commit `8f1084e3132a39270c3a13ebe37270a43ece2a01`): dev IDs 0–9 และ final IDs 10–49 ไม่ซ้ำทั้ง ID และ vector hash ภายในแต่ละ task ส่วน ALOHA ใช้ reset-seed ranges ที่แยกกันและบันทึก simulator-state hash จริงเพื่อจับคู่ rollout แต่ข้อมูลสาธิตไม่เปิดเผย cube poses หรือ reset seeds เดิม จึง **ยืนยันไม่ได้** ว่า ALOHA final poses ไม่มีใน demonstrations ไฟล์ audit ถูกสร้างและเก็บไว้นอก Git ในเครื่อง และยังไม่ได้อัปโหลดหรือ commit; `scripts/prepare_simulation_cohorts.py` สร้าง cohort manifest ที่ `asset/simulation_cohorts.json`
+Development evaluation is asynchronous. Each policy may have at most one unresolved
+development task. At the next evaluation boundary, resolve that task before
+submitting another. A patience boundary requires the boundary checkpoint's result
+before stopping. Apply each result to the evaluated checkpoint's epoch.
 
-## Data, selection, and final evaluation / ข้อมูล การเลือก และการทดสอบสุดท้าย
+Training and validation demonstrations use episode-disjoint manifests shared across
+backbones and training seeds. Use the saved normalization and protocol configuration
+when loading a checkpoint; do not replace them with loader defaults.
 
-Demonstration training/validation is episode-disjoint and shared across endpoints and seeds. The restored, hash-verified manifests show ALOHA 45/5 train/validation episodes (18,000/2,000 frames) and LIBERO 450/50 episodes (57,490/6,238 frames), using split seed 42; LIBERO has 45 train and 5 validation episodes per task. Both manifests report full episode coverage and disjointness. The ALOHA manifest carries state/action normalization statistics; the LIBERO manifest has no normalization keys. The audit verifies manifest integrity, split membership, and normalization-key presence, not an independent recomputation of those statistics. Its output was generated locally outside Git and is not included or uploaded; exact manifest hashes are pinned in the config.
+## Checkpoint durability and resume
 
-แบ่ง demonstrations ระดับ episode และใช้ชุดเดียวกันทุก endpoint/seed ตาม manifest ที่กู้คืนและตรวจ hash แล้ว: ALOHA train/validation 45/5 episodes (18,000/2,000 frames); LIBERO 450/50 episodes (57,490/6,238 frames), split seed 42 และ 45/5 episodes ต่อ task ทั้งสอง manifest ยืนยัน episode coverage ครบและไม่ซ้ำกัน manifest ALOHA มี state/action normalization statistics ส่วน LIBERO ไม่มี normalization keys; audit ตรวจ integrity, split membership และการมี keys แต่ไม่ได้คำนวณ statistics ซ้ำอย่างอิสระ ไฟล์ audit ถูกสร้างในเครื่องนอก Git และไม่ได้รวมไว้หรืออัปโหลด ส่วน config ระบุ manifest hashes
+`checkpoint_io.py` publishes SHA-addressed immutable recovery revisions. The trainer
+verifies an immutable recovery before committing controller state. Local `last.pt`
+remains available, while periodic durable synchronization skips the mutable
+`checkpoints/last.pt` alias. Resume selects a verified recovery revision and checks
+saved configuration, source identities, encoder assets, protocol, and checkpoint SHA.
 
-Training uses effective batch 128, 5,376 warmup updates, minimum LR ratio 0.01, and a warmup-cosine schedule to the 53,760-update reference point followed by a constant floor. The user revised development evaluation to every **10 epochs** on 2026-10-20, at epochs 100, 110, 120, and so on; stop after 30 elapsed training epochs without a strictly positive improvement, once the boundary checkpoint has been evaluated. There is no maximum epoch cap. Select the highest development success rate; ties go to the earliest checkpoint. The 53,760 value is a learning-rate reference point, **not** a fixed total-update budget or fixed final checkpoint.
+Recovery includes model, optimizer, scheduler, Python/NumPy/Torch/CUDA RNG state,
+training and validation generators, optimizer step, and selection-controller state.
+A conflicting checkpoint at the same epoch/step/revision must be rejected.
 
-ฝึกด้วย effective batch 128, warmup 5,376 updates, LR ต่ำสุด 0.01 เท่าของค่าสูงสุด ผู้ใช้เปลี่ยนจังหวะประเมินเป็นทุก **10 epochs** เมื่อวันที่ 2026-10-20 โดยเริ่มที่ epoch 100, 110, 120… และหยุดเมื่อผลประเมินยืนยันว่าไม่มีการปรับดีขึ้นเป็นเวลา 30 epochs ไม่มีเพดาน epoch เลือก checkpoint ที่ development success สูงสุด และเลือก epoch แรกเมื่อเสมอกัน ค่า 53,760 เป็นจุดอ้างอิงของ LR schedule **ไม่ใช่** จำนวน updates รวมแบบตายตัว
+`check_cached_checkpoint.py` performs an isolated real one-update checkpoint round
+trip for a selected dataset. Its diagnostic namespace and seed are separate from
+the scientific training runs. A diagnostic does not count as a trained policy or a
+rollout success measurement.
 
-Development evaluation is asynchronous: commit an immutable checkpoint and its queue task, then continue training while the separate evaluator works. Each policy has at most one unresolved development task. At the next scheduled evaluation boundary, wait for that task before submitting the next checkpoint; at a possible patience boundary, wait for the current checkpoint's result before advancing. Apply success rates to the checkpoint's epoch, not the later training epoch. A stale result cannot stop training before the required boundary evaluation: if the last improvement is epoch 100, the epoch-130 result must be observed before stopping. Resume restores the exact selection-checkpoint SHA and the latest optimizer state, including a due boundary interrupted before task publication.
+## Evaluation and provenance
 
-ประเมินแบบ asynchronous: บันทึก checkpoint ที่แก้ไขไม่ได้และงานในคิว แล้วเทรนต่อระหว่าง Pod simulation ทำงาน แต่ละ policy มีงาน dev ค้างได้หนึ่งงาน เมื่อถึงรอบถัดไปจึงรอผลเก่าก่อนส่ง checkpoint ใหม่ และรอผล checkpoint ปัจจุบันเมื่อถึงจุดที่อาจ early stop ใช้ epoch ของ checkpoint ในการนับ patience ไม่ใช้ epoch ที่เทรนไปถึงขณะรับผล เช่น ถ้าดีขึ้นครั้งสุดท้ายที่ epoch 100 ต้องเห็นผล epoch 130 ก่อนหยุด
+`success_queue.py` publishes development and final tasks with checkpoint and
+protocol identity. `runpod_eval_worker.py` validates and evaluates those tasks.
+Final evaluation uses the selected checkpoint only after development selection;
+final outcomes must not tune training or choose checkpoints.
 
-Every completed epoch writes `history.jsonl` and an atomic `training_curve.png` with separate training/validation loss lines per policy/seed. Both are copied to the durable run directory with the epoch recovery checkpoint. Rollout-only history rows are excluded from loss curves; resumed duplicate epochs use the latest row. Plotting preserves the training RNG state. Validation loss is diagnostic and does not select or stop this study.
+Pairing claims require matching actual simulator-state and initial-observation
+fingerprints for the corresponding training seed, task, and start ID. Preserve raw
+outcomes and retain comparisons as descriptive when required fingerprints differ.
+Reset-cohort separation does not establish that demonstration scenes are absent,
+and Goal evaluation does not establish unseen-task generalization. Training seeds,
+not individual rollout episodes, are the independent training replications.
 
-ทุก epoch เก็บข้อมูล `history.jsonl` และกราฟ `training_curve.png` แยก train/validation loss ต่อ policy/seed บน cloud พร้อม recovery checkpoint กราฟไม่รวมแถว success rate และใช้แถวล่าสุดเมื่อ resume แล้วมี epoch ซ้ำ การวาดกราฟรักษาสถานะสุ่มของการเทรนไว้ โดย loss ใช้ติดตามเท่านั้น ไม่ใช้เลือก checkpoint หรือ early stop
+`prepare_simulation_cohorts.py` builds the cohort manifest. Simulator checks are
+available through `check_simulation_renderer.py` and `smoke_runpod_simulators.py`.
+`plot_study_losses.py` and `analysis/runpod_paper_results.py` consume recorded data;
+missing rollouts must remain missing rather than being inferred from losses.
 
-Development starts are for stopping and checkpoint selection only. Final starts are reserved for one post-selection evaluation, with no tuning or checkpoint choice from final success. Pair endpoint rollouts within training seed, task, and start ID; require matching `initial_state_sha256` and `initial_state_kind`. LIBERO also records the init-state ID and hash; ALOHA records the reset identifier and actual MuJoCo-state hash. These fingerprints establish simulator-state pairing, not demonstration-scene absence.
+## Operational entrypoints
 
-ใช้ dev เพื่อหยุดและเลือก checkpoint เท่านั้น ส่วน final ใช้ประเมินครั้งเดียวหลังเลือก checkpoint ห้ามปรับหรือเลือกโมเดลจากผล final จับคู่ endpoint ภายใน training seed, task และ start ID โดยต้องตรวจ `initial_state_sha256` และ `initial_state_kind` ให้ตรงกัน fingerprint ยืนยันการจับคู่ simulator state ไม่ได้ยืนยันว่าไม่มีฉากเดียวกันใน demonstrations
+`runpod_bootstrap.py` materializes a verified source archive and stages pinned assets
+before starting the study runner. RunPod lifecycle actions require explicit
+resource ownership and authorization. The optional local `runpod_queue_manager.py`
+has a read-only `--dry-run` mode; trainer stopping is separately opt-in and gated by
+durable completion evidence. It is not started by importing the module or merging
+this code.
 
-## Compute roles and statistical unit / บทบาทเครื่องและหน่วยสถิติ
-
-The three-Pod roles remain unchanged: the existing B300 MIG ALOHA and LIBERO training Pods, plus the A5000 serial simulation-evaluation Pod. Downloaded Hugging Face backbones/tokenizers are initialization assets, not evidence that training completed. Evaluation runs one policy at a time across both simulators. Use GPU inference/rendering only after the EGL renderer probe passes; classic MuJoCo physics remains CPU-based, with no MJX backend change. The two training Pods remain on their current hardware; this plan does not migrate them. Each policy keeps the vision-language backbone frozen and trains only the token adapter and action decoder.
-
-บทบาทสาม Pod ยังคงเดิม: B300 MIG สำหรับ training ALOHA และ LIBERO และ A5000 สำหรับ simulation evaluation แบบ serial ทีละนโยบาย โมเดล/โทเคไนเซอร์ที่ดาวน์โหลดจาก Hugging Face เป็นเพียง initialization assets ไม่ใช่หลักฐานว่า training เสร็จแล้ว ใช้ GPU inference/rendering หลัง EGL probe ผ่านเท่านั้น; classic MuJoCo physics ใช้ CPU และไม่มีการเปลี่ยนเป็น MJX แผนนี้ไม่ได้ย้ายฮาร์ดแวร์ training แต่ละ policy freeze vision-language backbone และฝึกเฉพาะ token adapter กับ action decoder
-
-## Cached v6 continuation / การต่อ training แบบ cached v6
-
-The cached v6 plan will resume the existing v4 seed-3 checkpoints: ALOHA at epoch 14 / optimizer step 1,960 and LIBERO at epoch 2 / optimizer step 896. Both checkpoints were confirmed committed on the Global Volume before the earlier startup incident. The completed v11 ALOHA `exp05` GR00T cache is retained for reuse. The v12 migration audit will verify preservation of model weights, optimizer, scheduler, and RNG state before training resumes. If those checks pass, these will continue the same policies, not create new independent runs. The other seeds remain part of the 12-policy study.
-
-For each dataset role, the workflow requires one cache per backbone (two total), using the same raw data and frozen encoder revision as online-encoding v9. Historical v11 encoding at 11:10:05 UTC reported ALOHA batch 370/625 (11,840/20,000 frames; about 0.296 s per batch of 32) and LIBERO batch 200/2,656 (4,800/63,728 frames; about 0.447 s per batch of 24); that LIBERO partial is not current v12 progress. The v11 ALOHA `exp05` GR00T cache later completed all 20,000 frames, passed full first/last batch parity, and was published to the Global Volume at 11:13:40.152 UTC (SHA-256 `b1a256b6fc7c10699f5154050161ac2e1c8de702d71737da2e053352c25c38d`; 7,885,468,704 bytes); it will be kept and reused in v12. Unfinished v11 ALOHA Qwen and LIBERO cache partials were discarded after the authorized encoder-batch increase. V12 asset staging remains in progress (model group staging); its cache-encoding batch sizes are configured to 64 for ALOHA and 48 for LIBERO, while training batch size remains 128. No v12 encoding progress count has yet been confirmed. The v12 final-batch parity guard, publication of new caches, and checkpoint migration remain pending. The cached plan is `a34bb34e8023bd4d532c62789da3471ae7f9f2d68dfcc1ee22221d80e8ba7907`. Once training starts, the plan records train and validation losses each epoch; development rollouts begin at epoch 100, recur every 10 epochs, and use 30-epoch patience. This transition adds no profiling or benchmark claim and makes no two-hour completion promise. V12 source archive SHA-256 is `3bebc75e3fe90c5848024518ce19b19e4f2e1f2a65b9310eff995174399b6819` (2,703,360 bytes, 268 files), locally materialized; cloud publication has not yet been observed. The old v9 archive hash below is historical provenance, not the v12 source identity.
-
-แผน cached v6 จะต่อจาก checkpoint v4 seed 3: ALOHA epoch 14 / optimizer step 1,960 และ LIBERO epoch 2 / optimizer step 896 ยืนยันแล้วว่า checkpoint ทั้งสองถูกบันทึกบน Global Volume ก่อนหยุด deployment หลังแก้ปัญหา host/network จึงจะ stage cache และทำ migration โดย audit จะตรวจว่า model weights, optimizer, scheduler และ RNG state คงเดิมก่อนเริ่ม training หากผ่านการตรวจ จะถือเป็น policy เดิมที่ฝึกต่อ ไม่ใช่การทดลองอิสระชุดใหม่
-
-workflow ที่ตั้งค่าต้องใช้ cache หนึ่งชุดต่อ backbone ในแต่ละ dataset role โดยใช้ raw data และ frozen encoder revision เดียวกับ online-encoding v9 ความคืบหน้า v11 เวลา 11:10:05 UTC เป็นข้อมูลย้อนหลัง: ALOHA batch 370/625 (11,840/20,000 frames; ประมาณ 0.296 วินาทีต่อ batch 32) และ LIBERO batch 200/2,656 (4,800/63,728 frames; ประมาณ 0.447 วินาทีต่อ batch 24) ไม่ใช่ progress ปัจจุบันของ LIBERO v12 ต่อมา cache ALOHA `exp05` GR00T v11 ครบ 20,000 frames ผ่าน first/last batch parity และเผยแพร่บน Global Volume เวลา 11:13:40.152 UTC (SHA-256 `b1a256b6fc7c10699f5154050161ac2e1c8de702d71737da2e053352c25c38d`; 7,885,468,704 bytes) โดยจะเก็บไว้ใช้ซ้ำใน v12 partial cache v11 ของ ALOHA Qwen และ LIBERO ที่ยังไม่เสร็จถูกทิ้งหลังเพิ่ม encoder batch size ตามที่อนุมัติ v12 กำลัง stage assets (model group ยังอยู่ระหว่าง stage) และตั้งค่า encode batch size เป็น 64 สำหรับ ALOHA และ 48 สำหรับ LIBERO; training batch size ยังคง 128 ยังไม่มีตัวเลข progress การ encode v12 ที่ยืนยันแล้ว final-batch guard, การเผยแพร่ cache ใหม่ และ migration checkpoint v12 ยังรอดำเนินการ แผน cached มี ID `a34bb34e8023bd4d532c62789da3471ae7f9f2d68dfcc1ee22221d80e8ba7907` เมื่อ training เริ่มจะบันทึก train/validation loss ทุก epoch เริ่ม rollout development ที่ epoch 100 แล้วทุก 10 epochs และใช้ patience 30 epochs ไม่มีการอ้าง profiling/benchmark ใหม่หรือรับประกันว่าจะเสร็จภายในสองชั่วโมง source v12 มี SHA-256 `3bebc75e3fe90c5848024518ce19b19e4f2e1f2a65b9310eff995174399b6819` (2,703,360 bytes, 268 files) และ materialize ในเครื่องแล้ว แต่ยังไม่เห็นการเผยแพร่บน cloud ส่วน hash ของ v9 ด้านล่างเป็นหลักฐานย้อนหลัง ไม่ใช่ identity ของ source v12
-
-The independent training unit is a trained policy/seed: **n = 3 per backbone per benchmark**, not the number of rollout episodes. Report each policy and the unweighted mean and sample SD across its three training seeds. Episodes are repeated, paired measurements conditional on those trained policies; 200 ALOHA episodes or 400 LIBERO episodes per policy do not create 200 or 400 independent training replications. The primary comparison family has six backbone comparisons (two benchmarks × three seeds); report paired uncertainty and avoid treating a nonsignificant difference as equivalence.
-
-หน่วยการฝึกอิสระคือนโยบายต่อ training seed: **n = 3 ต่อ backbone ต่อ benchmark** ไม่ใช่จำนวน rollout รายงานแต่ละนโยบาย พร้อมค่าเฉลี่ยไม่ถ่วงน้ำหนักและ sample SD จากสาม training seeds จำนวน episode เป็นการวัดซ้ำแบบจับคู่ภายใต้นโยบายที่ฝึกแล้ว ไม่ทำให้ 200/400 rollouts กลายเป็นจำนวนการทดลองฝึกอิสระเท่ากัน
-
-## Relationship to the manuscript / ความต่างจาก manuscript
-
-This is a distinct prospective protocol, not an exact replication of the submitted fixed-update study. The submitted manuscript's fixed 53,760-update budget conflicts with this protocol: 53,760 is only the LR reference point here, while stopping uses minimum 100 epochs and 30-epoch patience with no maximum epoch cap. The manuscript also contains legacy model-head sizes, image resolutions/token counts, and normalization descriptions; treat those as submitted-version details until reconciled against the active code/config, and do not silently present them as current implementation facts. Do not pool old submitted results with this study.
-
-The submitted manuscript reports 14,014,990 trainable parameters for ALOHA versus 19,165,319 for two-view LIBERO; one 320×240 ALOHA view with 54 image tokens versus two 224×224 LIBERO views with 128 image tokens; and different normalization/action conventions. These are legacy manuscript figures, not confirmed active-run values. Reconcile them before reporting architecture details. The intended backbone/tokenizer chain is Qwen → Cosmos → GR00T; do not describe both endpoints as sharing a GR00T-to-Cosmos lineage. Cross-benchmark contrasts remain confounded by embodiment, task, cameras, image-token budget, head size, and action/normalization design. The study cannot identify a causal effect of robot pretraining or support broad claims about other backbones/tasks.
-
-โปรโตคอลนี้ต่างจากงานที่ส่งแล้วซึ่งกำหนด 53,760 updates ตายตัว โดยค่านี้เป็นจุดอ้างอิง LR เท่านั้น การหยุดใช้ขั้นต่ำ 100 epochs และ patience 30 epochs โดยไม่มีเพดานสูงสุด manuscript ยังมี head sizes, image resolutions/token counts และคำอธิบาย normalization/action แบบเก่า ให้ถือเป็นรายละเอียดของฉบับที่ส่งจนกว่าจะเทียบกับ code/config ปัจจุบัน ห้ามรวมผลเก่ากับการศึกษานี้
-
-ฉบับ manuscript ที่ส่งรายงาน head sizes 14,014,990 (ALOHA) และ 19,165,319 (LIBERO), ภาพ ALOHA 320×240/54 tokens เทียบกับ LIBERO สองภาพ 224×224/128 tokens และแนวทาง normalization/action ต่างกัน ตัวเลขเหล่านี้เป็นข้อมูลฉบับเก่าและยังไม่ยืนยันกับ run ปัจจุบัน ต้องตรวจสอบก่อนรายงาน chain ที่ตั้งใจคือ Qwen → Cosmos → GR00T ไม่ใช่ GR00T-to-Cosmos ที่ใช้ร่วมกัน ความต่างข้าม benchmark ยังมี confound และไม่รองรับข้ออ้างเชิงสาเหตุของ robot pretraining หรือการ generalize กว้างไปยัง backbone/task อื่น
-
-## Evidence status and gaps / สถานะหลักฐานและช่องว่าง
-
-**Historical online-v9 runtime checks (2026-10-20).** Both training Pods passed 32 startup tests. GR00T and Qwen seed 3 completed real optimizer updates on both benchmarks; the first real-sample VLM check reported zero maximum absolute and relative L2 error against the original projection for all four policies. Both simulator reset/render probes reported NVIDIA A5000 hardware EGL, without advancing a task. These checks do not establish completed policies or rollout success rates and do not describe the cached v6 execution mode.
-
-The online-v9 runtime source is historical: `/workspace-global/action-omni/study_v1/source/runpod-source-online-v9.tar`, SHA-256 `1dfa9ac490150f5ac8240b354fccae122bcfce5e44ac1a9031bc5e9403b9b8c1`, plan ID `fcd23d9252310bc0586f8ba069f4858a0d6b43675fdbd5776dc98a78a5a144b3`. It documents the earlier online-encoding path only. The v11 ALOHA `exp05` cache is a completed, published artifact available for v12 reuse. The v12 source is locally materialized but cloud publication has not yet been observed. The existing v4 checkpoints available for continuation are ALOHA epoch 14 / step 1,960 and LIBERO epoch 2 / step 896. V12 asset staging is in progress; its updated encoder batch configuration has no confirmed progress count yet. Migration audit and checkpoint-preservation verification remain pending. Historical v1/v2 failures and the v8 bootstrap that stopped before copying weights remain separate diagnostics.
-
-The v3 runner signed the default image-token ID before the encoder resolved the released backbone's ID. The trainer signed the resolved configuration, causing the mismatch found during continuation checks. V9 resolves the token from the same local processor/config before the runner signs it. The audit independently verifies the original pre-load lock signature and actual saved-checkpoint signature; it does not bypass signature checks or change model inputs.
-
-Global volumes do not promise POSIX atomic rename, locking, or immediate cross-Pod visibility. Recovery checkpoints therefore also have immutable revision/epoch/SHA filenames, and readers verify content before selecting a revision; incomplete newer revisions are ignored. Queue readers retry missing or partially visible manifests/results and require complete checkpoint/result provenance. This is not a general transactional filesystem or locking protocol. [RunPod storage limitations](https://docs.runpod.io/storage/globalvolume/overview#limitations).
-
-The existing B300 MIG training Pods and A5000 evaluation Pod are retained. The earlier network error is historical. V11 starts succeeded at 10:58:48.846/10:58:51 and 10:58:51/10:58:54 UTC for ALOHA and LIBERO (Pod/container); both passed 38 startup tests and reported MIG capacity of 32,749,125,632 bytes, with PyTorch 2.9.1+cu130 setup complete. The v11 ALOHA `exp05` GR00T cache completed all 20,000 frames, passed full first/last parity, and was published at 11:13:40.152 UTC (SHA-256 `b1a256b6fc7c10699f5154050161ac2e1c8de702d71737da2e053352c25c38d`; 7,885,468,704 bytes); it will be reused. Unfinished v11 ALOHA Qwen and LIBERO partials were discarded for the authorized cache-encoding batch increase; the old 11:10:05 LIBERO 4,800/63,728-frame point is historical, not current progress. V12 source `3bebc75e3fe90c5848024518ce19b19e4f2e1f2a65b9310eff995174399b6819` (268 files, 2,703,360 bytes) is locally materialized; cloud publication has not yet been observed. ALOHA and LIBERO Pods restarted at 11:17:48.846 and 11:17:56.332 UTC. V12's bootstrap expects 39 startup tests, but a passing result has not yet been observed; the local focused sampler check passed. V12 asset staging is in progress (model group staging). V12 cache encoding is configured for batches 64/48 (ALOHA/LIBERO); training batch size remains 128. The bootstrap is configured to sample `nvidia-smi` before and during cache preparation. V12 final-batch parity, publication of new caches, and checkpoint migration remain pending. The evaluator is still EXITED and unchanged. RunPod operations for this study are managed through the RunPod MCP integration.
-
-**Results pending.** Both demonstration split manifests are restored and hash-verified, and the CPU-generated LIBERO fixed-start manifest verifies all 500 initial-state vectors and dev/final disjointness across ten tasks. Checkpoint selection, completed simulator rollouts, and success rates remain pending. Before reporting outcomes, archive run/config/checkpoint provenance and validate per-record actual-state hashes and paired cohort membership. Do not assert unseen-task generalization, absence of scenes from the demonstration corpus, causality, or equivalence based on a nonsignificant test. Gripper/action interpretations should remain descriptive unless separately supported.
-
-**runtime online-v9 ในอดีตผ่านการตรวจ แต่ผลยังรออยู่.** วันที่ 2026-10-20 ทั้งสอง Pod ผ่าน startup tests 32 รายการ และ GR00T/Qwen seed 3 อัปเดตน้ำหนักจริงได้ครบสอง benchmark การเทียบ VLM กับ projection เดิมให้ error ศูนย์ทั้งสี่ policy; ทั้งสอง simulator ผ่าน NVIDIA A5000 EGL reset/render probe โดยยังไม่เดิน task ขั้นตอนเหล่านี้ไม่ใช่หลักฐานว่ามี policy ที่ฝึกเสร็จหรือ success rate และไม่อธิบาย execution mode cached v6 กู้คืนและยืนยัน hash ของ demonstration manifests แล้ว และ cohort manifest ยืนยัน LIBERO initial states ครบ 500 ชุดพร้อม dev/final ที่ไม่ซ้ำ ก่อนรายงานผลต้องเก็บ provenance ของ checkpoint และตรวจ actual-state hashes กับคู่ cohort ต่อ record ห้ามอ้าง unseen-task generalization, การไม่มีฉากซ้ำใน demonstrations, เหตุเชิงสาเหตุ หรือ equivalence จากผลที่ไม่มีนัยสำคัญ
+Keep generated results, model weights, feature caches, dataset files, credentials,
+and machine-specific Pod configuration outside version control. The fresh/cache
+study plans and implementation are reproducible code; generated run records are
+separate experiment artifacts.

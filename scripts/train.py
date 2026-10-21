@@ -41,7 +41,7 @@ sys.path.insert(0, str(ROOT))
 
 from configs.registry import get_config
 from models.vla_train import VLATrainModel
-from scripts.checkpoint_io import atomic_copy_checkpoint, latest_verified_recovery, publish_recovery_revision
+from scripts.checkpoint_io import atomic_copy_checkpoint, file_sha256, latest_verified_recovery, publish_recovery_revision
 from scripts.run_log import log_event, write_json_atomic
 
 _FAILURE_CONTEXT: dict = {}
@@ -197,7 +197,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--rollout-durable-root", type=Path,
                         help="Shared durable root used by the rollout evaluator queue")
     parser.add_argument("--rollout-durable-run-dir", type=Path,
-                        help="Durable mirror of this run directory for atomic last.pt and selection-checkpoint recovery")
+                        help="Durable mirror of this run directory for verified immutable recovery and selection checkpoints")
     parser.add_argument("--rollout-study-id", type=str,
                         help="Stable study namespace for durable rollout tasks")
     parser.add_argument("--rollout-plan-id", type=str,
@@ -543,8 +543,8 @@ def main(argv: list[str] | None = None) -> None:
         decay_steps = args.lr_decay_steps or decay_epochs * len(train_loader)
     if rollout_config is None and decay_steps > total_steps:
         raise ValueError("Learning-rate decay endpoint cannot exceed the fixed training budget")
-    if decay_steps <= cfg.warmup_steps + 1:
-        raise ValueError("LR decay horizon needs more steps than warmup_steps + 1")
+    if decay_steps <= cfg.warmup_steps:
+        raise ValueError("LR decay horizon needs more steps than warmup_steps")
     scheduler = get_cosine_with_min_lr_schedule_with_warmup(
         optim, num_warmup_steps=cfg.warmup_steps,
         num_training_steps=decay_steps, min_lr_rate=cfg.min_lr_ratio)
@@ -666,16 +666,18 @@ def main(argv: list[str] | None = None) -> None:
     def restore_durable_recovery_if_newer() -> None:
         if rollout_controller is None or args.fresh:
             return
-        durable_recovery_path = latest_verified_recovery(durable_last_path.parent) or durable_last_path
-        if not durable_recovery_path.is_file():
-            return
+        durable_recovery_path = latest_verified_recovery(durable_last_path.parent)
+        if durable_recovery_path is None:
+            if not durable_last_path.is_file():
+                return
+            durable_recovery_path = durable_last_path  # Legacy runs may only have this alias.
         from experiment_protocol import file_digest
         durable_ck = torch.load(durable_recovery_path, map_location="cpu", weights_only=False)
         validate_recovery_identity(durable_ck, durable_recovery_path)
         if not last_path.is_file():
             atomic_copy_checkpoint(durable_recovery_path, last_path, file_digest(durable_recovery_path))
             log_event("training.durable_last_restored", path=str(last_path),
-                      durable_path=str(durable_last_path), epoch=durable_ck.get("epoch"),
+                      durable_path=str(durable_recovery_path), epoch=durable_ck.get("epoch"),
                       optimizer_step=durable_ck.get("global_step"))
             return
         try:
@@ -686,7 +688,7 @@ def main(argv: list[str] | None = None) -> None:
                       error=f"{type(exc).__name__}: {exc}")
             atomic_copy_checkpoint(durable_recovery_path, last_path, file_digest(durable_recovery_path))
             log_event("training.durable_last_restored", path=str(last_path),
-                      durable_path=str(durable_last_path), epoch=durable_ck.get("epoch"),
+                      durable_path=str(durable_recovery_path), epoch=durable_ck.get("epoch"),
                       optimizer_step=durable_ck.get("global_step"))
             return
         def order(checkpoint: dict) -> tuple[int, int, int]:
@@ -697,7 +699,7 @@ def main(argv: list[str] | None = None) -> None:
         if durable_order > local_order:
             atomic_copy_checkpoint(durable_recovery_path, last_path, file_digest(durable_recovery_path))
             log_event("training.durable_last_restored", path=str(last_path),
-                      durable_path=str(durable_last_path), epoch=durable_order[0],
+                      durable_path=str(durable_recovery_path), epoch=durable_order[0],
                       optimizer_step=durable_order[1], recovery_revision=durable_order[2])
         elif durable_order == local_order and file_digest(last_path) != file_digest(durable_recovery_path):
             raise ValueError("Local and durable last.pt have conflicting contents at the same recovery revision")
@@ -724,12 +726,12 @@ def main(argv: list[str] | None = None) -> None:
         if rollout_controller is not None:
             revision_path = publish_recovery_revision(last_path, durable_last_path.parent,
                                                      epoch, recovery_revision)
+            durable_sha = file_sha256(revision_path)
             for name in ("history.jsonl", "training_curve.png"):
                 artifact = Path(cfg.output_dir) / name
                 if artifact.is_file():
                     atomic_copy_checkpoint(artifact, durable_counterpart(artifact))
-            durable_sha = atomic_copy_checkpoint(last_path, durable_last_path)
-            log_event("training.durable_last_committed", path=str(durable_last_path),
+            log_event("training.durable_last_committed", path=str(revision_path),
                       sha256=durable_sha, epoch=epoch, optimizer_step=global_step,
                       immutable_recovery_path=str(revision_path),
                       recovery_revision=recovery_revision)
@@ -828,8 +830,14 @@ def main(argv: list[str] | None = None) -> None:
             print(f"[resume] continuing from epoch {start_epoch} "
                   f"(best_val={best_val_loss:.4f}) — last.pt @ epoch {ck['epoch']}")
             if rollout_controller is not None:
-                # last.pt is the recovery commit; re-mirror it before the queue
-                # replays any pending idempotent rollout task.
+                # Local last.pt may be ahead after a failed durable publication.
+                # Verify its immutable copy before committing controller state.
+                revision_path = publish_recovery_revision(
+                    last_path, durable_last_path.parent, int(ck["epoch"]), recovery_revision)
+                log_event("training.durable_last_committed", path=str(revision_path),
+                          sha256=file_sha256(revision_path), epoch=int(ck["epoch"]),
+                          optimizer_step=global_step, immutable_recovery_path=str(revision_path),
+                          recovery_revision=recovery_revision)
                 write_json_atomic(rollout_state_path, {
                     "schema": 1, "study_id": args.rollout_study_id,
                     "plan_id": args.rollout_plan_id, "dataset": args.dataset,
