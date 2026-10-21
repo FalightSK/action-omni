@@ -30,3 +30,7 @@ Standard multi-file LaTeX: `pdflatex main.tex` twice, or `tectonic main.tex`, fr
 ## Measured-data visualization update
 
 The 37 measured ALOHA checkpoint results are shown in separate seed panels with visible markers, an external legend and common 0-100% axes. Straight connectors are guides to the eye, not interpolated observations. Qwen seed 5 is explicitly unmeasured. A new final LIBERO policy chart displays the three exact 400-episode counts. No scientific number or prose conclusion changed.
+
+## Final author-requested no-figure version
+
+All figure environments, image inclusions and figure-only references were removed. All four table environments were compared with the preceding source and verified unchanged verbatim. Measured numerical results, authorship metadata and the IEEE copyright notice are preserved. No external image dependency remains.
