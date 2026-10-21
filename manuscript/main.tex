@@ -2,39 +2,33 @@
 \usepackage[T1]{fontenc}
 \usepackage{amsmath,amssymb,booktabs,array}
 \usepackage{xcolor}
+\usepackage{graphicx}
 \usepackage[hidelinks]{hyperref}
 \newcommand{\pending}{\textcolor{red!65!black}{Pending}}
 \newcommand{\groot}{GR00T N1.7}
 \newcommand{\qwen}{Qwen3-VL-2B}
-\title{An Empirical Study of Robot Pretraining in Frozen VLA Backbones}
-\author{\IEEEauthorblockN{Author information pending}
-\IEEEauthorblockA{Affiliation and contact information pending}}
+\title{When and How Does Robot Pretraining Help? Observability, Task Structure, and the Failure of Offline Metrics in Vision--Language--Action Policies}
+\author{\IEEEauthorblockN{Anonymous Author(s)}
+\IEEEauthorblockA{Anonymous Affiliation\\
+anonymous@example.com}}
 \begin{document}
 \maketitle
-\begin{center}
-\fbox{\parbox{0.95\columnwidth}{\small\textbf{Revision draft---not submission ready.}
-Six independent ALOHA heads completed matched uninstrumented 200-start evaluations.
-Across training seeds 3--5, mean success was 49.3\% for \groot{} and 39.8\% for
-\qwen{}; one seed pair favored \qwen{}. The new protocol differs from the submitted
-training and evaluation recipe, so historical and new rates are not pooled.}}
-\end{center}
-
 \begin{abstract}
-Does robot adaptation improve a frozen vision--language backbone when its
-original action expert is replaced? We compare stock \qwen{} with its
-robot-adapted descendant \groot{} using matched downstream heads. In the
-submitted ALOHA evaluation, the paper reported 61.25\% versus 51.75\% over two
-runs per backbone. A new matched fixed-endpoint study over three independent
-training seeds found means of 49.3\% $\pm$ 6.0 and 39.8\% $\pm$ 11.0,
-respectively, with a mean paired difference of 9.5 points favoring \groot{}.
-The direction reversed for one seed pair, so three seeds do not establish a
-stable training-population effect. In each pair, \groot{} had lower offline
-validation loss, yet \qwen{} won the seed-3 rollout comparison; validation loss
-did not consistently identify the closed-loop winner. The revised ALOHA recipe
-and evaluation cohort differ from the submitted protocol, and the new runs were
-not instrumented for gripper behavior. Historical gripper traces describe an
-observed pattern, not a proven cause. Claims remain limited to these frozen
-backbones and the tested ALOHA setting.
+We compare frozen Qwen3-VL-2B and the vision--language subtree of GR00T N1.7
+with newly trained action heads in simulated manipulation. In a fixed-100-epoch
+ALOHA study, three independent training seeds per backbone yield success means
+of $49.3\%\pm6.0$ and $39.8\%\pm11.0$, respectively (sample SD); one seed
+pair reverses the mean ordering. A separate development-selected LIBERO-Goal
+campaign yields 84.25\% and 89.00\% for two GR00T seeds, and 91.50\% for one
+Qwen seed. The incomplete replication and unequal selected training endpoints
+preclude a stable population-level ranking. In LIBERO seed 3, lower flow loss
+and action MAE favor GR00T despite lower success, whereas action MSE favors
+Qwen. Offline disagreement is therefore metric-dependent. An additional ALOHA
+checkpoint sweep is developmental and is kept separate from final tests.
+Historical gripper observations motivate hypotheses but do not establish a causal
+mechanism. These results characterize the tested frozen endpoints and recipes;
+they do not isolate robot pretraining from other adaptation stages or establish
+generalization across model families, tasks, or physical robots.
 \end{abstract}
 \begin{IEEEkeywords}
 vision--language--action, robot learning, frozen representations, evaluation,
@@ -60,7 +54,7 @@ caused a downstream difference. An optional intermediate-checkpoint experiment
 is planned, not reported as completed.
 
 Two questions organize the study. \textbf{RQ1:} how does the frozen endpoint
-contrast vary with camera configuration and benchmark, and how reliable is it
+contrast vary across the tested settings, and how reliable is it
 across independent head training? \textbf{RQ2:} do the selected offline measures
 reflect the observed closed-loop comparisons? ALOHA transfer-cube provides a
 fixed-instruction bimanual handover~\cite{aloha}; LIBERO-Goal provides
@@ -68,15 +62,12 @@ ten instruction-conditioned single-arm tasks~\cite{libero}. Their differences ma
 them informative evaluation settings, but prevent attribution of a cross-benchmark
 contrast to one property such as arm count or action space.
 
-The submitted study evaluated six configurations in 1,600 primary rollouts,
-with checkpoint ladders and 400 instrumented ALOHA rollouts in support. Its
-contributions are the comparison of camera and endpoint contrasts on a common
-success-rate scale, a staged description of handover failures, and a concrete
-offline--online mismatch. We retain that evidence and organization here, while
-correcting its scope. Separate batches of scenes evaluate existing policies;
-they do not measure variation from initializing and training another policy.
-The revised protocol tests reliability without assuming that the original
-ordering will persist.
+We separate three evidence sources: the submitted observations, a prospective
+fixed-endpoint ALOHA study, and a later development-selected campaign with
+final LIBERO evaluations and sparse ALOHA checkpoint measurements. They differ
+in training, selection, and evaluation, so their success rates are not pooled.
+Training seeds index independent learned heads; checkpoint measurements and
+additional rollout scenes do not constitute new training runs.
 
 \section{Related Work}
 \textbf{VLA design studies.} RoboVLMs studies backbone, architecture, and data
@@ -86,19 +77,18 @@ component study removes the released action expert and compares frozen features
 using a shared downstream recipe within each benchmark. It does not evaluate
 the complete GR00T policy or establish interactions across a broad model family.
 
-\textbf{Observation configuration.} Hsu et al. study how hand-centric views
-affect learning and generalization~\cite{handview}. We examine a wrist-camera
-control in a frozen-VLM setting and report its success-rate contrast alongside
-the endpoint contrast. This makes the magnitudes comparable within LIBERO;
-it does not isolate observability as the cause of all residual failures.
+\textbf{Observation configuration.} Hand-centric views can affect learning and
+generalization~\cite{handview}. The later campaign uses two-camera LIBERO only.
+Its excluded one-camera condition does not support a camera-count conclusion.
+Our cross-benchmark comparisons also change embodiment and action space, so
+they do not isolate a single factor.
 
 \textbf{Evaluation validity.} Critical Interval MSE studies offline validation
 focused on task-critical segments~\cite{cimse}. We examine selected aggregate
 losses and diagnostics, without testing that method or claiming that all offline
 evaluators fail. LIBERO-PRO reports sensitivity to evaluation conditions and
-instruction perturbations~\cite{liberopro}. Our language ablation includes a
-fixed-instruction ALOHA control to distinguish task-discriminative information
-from sensitivity to removing text tokens.
+instruction perturbations~\cite{liberopro}. The submitted fixed-instruction ALOHA ablation cautions that sensitivity to
+removing text tokens need not imply task-discriminative language use.
 
 \section{Experimental Design}
 \subsection{Frozen endpoints and downstream heads}
@@ -144,136 +134,103 @@ measures demonstrated action prediction on held-out episodes; test success
 measures the policy's behavior under its own actions in simulation. The two
 quantities are not interchangeable.
 
-\subsection{Training and checkpoint selection}
-The prospective ALOHA comparison trains three independent heads per backbone,
-with seeds 3, 4, and 5 controlling initialization, shuffling, dropout, and flow
-noise. Both endpoints use the same episode split and training-only normalization.
-The locked recipe uses AdamW, weight decay $10^{-2}$, a warmup--cosine schedule
-with peak learning rate $3\times10^{-4}$ for the decoder and half that rate for
-the adapter, batch size 256, and 100 epochs. The 300-update warmup completes
-before patience is counted; the minimum and maximum are both 100 epochs, so the
-predeclared fixed-final checkpoint is epoch 100. This differs from the submitted
-training budget and is a prospective matched comparison, not an exact
-reproduction. No checkpoint or hyperparameter is selected using test success.
-Cache metadata and checkpoint signatures link the split, normalization,
-encoder settings, code, and training seed; mismatched records are rejected.
+\subsection{Training campaigns and selection}
+The fixed-endpoint ALOHA study uses three independent head-training seeds,
+3--5, per backbone, controlling initialization, shuffling, dropout, and flow
+noise. Its locked recipe uses AdamW, weight decay $10^{-2}$, warmup--cosine
+scheduling, decoder peak learning rate $3\times10^{-4}$, half that rate for the
+adapter, batch size 256, and a fixed epoch-100 checkpoint. It differs from the
+submitted recipe; it is a prospective comparison rather than an exact reproduction.
 
-\subsection{Closed-loop evaluation}
-Each ALOHA policy is evaluated on the same 200 scene IDs (10000--10199); within
-each training seed, both backbones share initial states, environment seeds, and
-policy-sampling seeds. The records preserve these seeds separately, allowing
-paired episode tests conditional on the trained policy pair. The evaluation uses
-\texttt{render\_samples=0} and saves no video or trace; this rendering change from the
-submitted setting is another reason the new rates are not an exact reproduction.
+The later campaign uses development-rollout success for checkpoint selection.
+The final LIBERO checkpoints are GR00T seed 3 at epoch 100 (44,800 updates),
+Qwen seed 3 at epoch 130 (58,240), and GR00T seed 4 at epoch 110. These are
+selected endpoints with unequal training budgets, not an equal-update ablation.
+The 98/100 Qwen seed-4 result is development-only and is excluded from the
+final table. The ALOHA sparse sweep evaluates existing checkpoints; it does not
+provide a completed final comparison for that later campaign.
 
-The primary ALOHA evaluation is uninstrumented; trace capture is opt-in for a
-separately named diagnostic run. Trace mode records actions, pre- and post-step
-states, reward, and available per-replan attention. For seed 0, the matched
-50-start trace screen scored 6/50 versus 5/50 untraced, so instrumentation
-noninterference is not established. Diagnostic counts must reconcile with the
-success records. LIBERO
-demonstration replay and ALOHA action-plumbing checks examine different aspects
-of the harness. Neither is proof that the policy has reached a performance
-ceiling. Numerical harness-validation results require rerunning their checks.
+\subsection{Validation metrics}
+For $N$ held-out state/action chunks of horizon $H$ and dimension $D$, action
+MSE and MAE average $(\hat a-a)^2$ and $|\hat a-a|$, respectively, over all
+$NHD$ entries. Flow loss averages the squared velocity residual in (1), with
+Gaussian noise and uniformly sampled flow time. Validation fixes RNG seed 4242.
+Action prediction uses three integration steps and batch sampling seeds
+$424200+b$ for validation batch $b$; it samples a generated action chunk rather
+than evaluating the demonstrated velocity target alone. Sampling is isolated
+from the flow-loss RNG stream.
 
-\subsection{Statistics}
-Report each policy's successes and attempts, then the unweighted mean and sample
-standard deviation across the three independently trained heads per backbone.
-Per-policy Wilson intervals describe rollout uncertainty conditional on a
-trained policy; the across-head SD describes variation across only three seeds.
-Historical run-level summaries are kept separate from this prospective estimate.
+LIBERO metrics use the configured raw action representation (seven dimensions);
+ALOHA metrics use configured normalized joint-target space (14 dimensions),
+with training-only mean/std and denormalization before execution. Thus their
+absolute losses cannot be compared across benchmarks. The later LIBERO records
+contain $N=6238$ validation chunks and ALOHA $N=2000$. These are overlapping
+within-episode samples, not thousands of independent demonstrations. The local
+protocol audit reports 450/50 train/validation LIBERO episodes and 45/5 ALOHA
+episodes with full, disjoint membership. The exported package retains protocol
+digests but omits episode IDs; exact membership requires the original manifests.
 
-For each endpoint pair and training seed, show the paired $2\times2$ outcome
-table, the success-rate difference, and an exact two-sided McNemar test.
-Paired percentile-bootstrap intervals use 20,000 resamples. These intervals do
-not cover unseen tasks or population-level training variability. The locked
-family contains six primary tests; for ALOHA we report the Holm adjustment across
-its three completed seed pairs and a Bonferroni adjustment for the full family.
-Three seeds provide a limited estimate of training variability; episode-level
-significance cannot establish a general training-population effect.
+\subsection{Evaluation pairing and uncertainty}
+The fixed-endpoint ALOHA study evaluates each policy on 200 shared scene IDs,
+10000--10199, within each training-seed pair, with matched environment and
+policy-sampling seeds. It disables videos, tracing, and rendered samples.
+The later sparse ALOHA sweep uses 50 development starts, IDs 20000--20049.
+The evaluator resets with $(\mathrm{episode\ index}+\mathrm{seed\ offset})137+42$,
+independent of backbone, and records state/image fingerprints before actions.
+Pairing is implemented; a per-policy audit flag does not test cross-policy
+pairing. An older seed-3 epoch-100 pair has 50/50 matched physical-state,
+image, and environment-seed records, but its checkpoint digests differ from the
+latest sparse export. We therefore do not transfer its paired contingency table
+or test to the later checkpoints. Their raw paired outcomes require inspection.
+
+LIBERO final evaluation uses 40 starts per task for ten tasks (400 total),
+separate from the ten development starts per task. Seed-3 initial-state and
+initial-observation fingerprints match for all 400 backbone pairs. This verifies
+physical-start pairing, not independent training replication. The available
+export does not contain the paired success contingency counts, so no new
+McNemar statistic is inferred from marginal totals.
+
+We report one success rate per independent trained head and unweighted means
+and sample SD across heads. An SD for one seed is unavailable. Conditional
+rollout uncertainty and paired episode tests do not quantify variation over
+unseen training seeds or tasks. The fixed-endpoint ALOHA analysis uses exact
+two-sided McNemar tests, paired bootstrap intervals (20,000 resamples), Holm
+correction over its three seed pairs, and a conservative Bonferroni correction
+for the original six-test family. These corrections are specific to that study.
 
 \section{Closed-Loop Comparisons}
-\subsection{Evidence status}
-The submitted ALOHA paper reports two independent runs per backbone, each on a
-disjoint 200-start rollout cohort. The original checkpoints, training logs, and
-per-episode outcomes were not recovered, so their training provenance and full
-paired analysis cannot be independently audited. The new prospective ALOHA
-comparison includes three verified training seeds per backbone. Historical and
-new results are reported separately because their training and evaluation
-protocols differ.
-
-\subsection{Camera configuration and LIBERO-Goal}
-Table~\ref{tab:libero} restores the original camera comparison. Adding a wrist
-camera increased submitted success by 29.0 points for GR00T and 21.0 points for
-stock Qwen. These contrasts were larger than the 2.5-point endpoint contrast
-under two cameras. A large camera contrast does not establish statistical power
-for a smaller backbone difference. Moreover, removing a view changes the input
-configuration relative to robot pretraining; the one-camera rows are observation
-controls rather than a clean measure of the robot-training stage alone.
+\subsection{Final LIBERO-Goal evidence}
+Table~\ref{tab:libero-final} reports all completed final evaluations in the
+later campaign. GR00T's two independent seeds have mean 86.625\% and sample
+SD 3.359 percentage points; Qwen has only one final seed, so its across-run SD
+is unavailable. The seed-3 contrast favors Qwen by 7.25 points, conditional on
+the tested policies. Unequal replication and selected epochs prevent a stable
+population-level or equal-budget conclusion. The ten tasks share one benchmark
+suite and are not ten independent training runs.
 
 \begin{table}[t]
-\centering\small\setlength{\tabcolsep}{4pt}
-\caption{Submitted LIBERO-Goal observations ($n=200$ rollouts per row).
-Losses use the earlier validation protocol and are not episode-holdout estimates.}
-\label{tab:libero}
-\begin{tabular}{@{}lcrr@{}}
-\toprule
-Backbone & Views & Validation loss & Success \\
-\midrule
-\groot{} & 1 & 0.0316 & 62.5\% \\
-\qwen{} & 1 & 0.0332 & 68.0\% \\
-\groot{} & 2 & 0.0352 & 91.5\% \\
-\qwen{} & 2 & 0.0352 & 89.0\% \\
-\bottomrule
+\centering\small
+\caption{Later campaign, LIBERO-Goal final evaluations. All use two cameras;
+checkpoints were selected using development success.}
+\label{tab:libero-final}
+\begin{tabular}{@{}lrrr@{}}\toprule
+Backbone & Training seed & Epoch & Successes/attempts\\\midrule
+GR00T & 3 & 100 & 337/400 (84.25\%)\\
+GR00T & 4 & 110 & 356/400 (89.00\%)\\
+Qwen & 3 & 130 & 366/400 (91.50\%)\\\bottomrule
 \end{tabular}
 \end{table}
 
-The saved two-camera paired counts are 165 both succeeding, four both failing,
-18 GR00T-only successes, and 13 stock-only successes. An exact two-sided McNemar
-calculation gives $p\approx0.473$, conditional on those policies and starts.
-This corrects the submitted approximate test; nonsignificance neither establishes
-equivalence nor bounds the absolute effect below seven percentage points.
-The historical checkpoint ladder also does not support ``no advantage at any
-stage'': stock led at epoch 25 (77\% versus 61\%), but GR00T led at epoch 50
-(83\% versus 78\%), each evaluated on 100 starts. These are checkpoint
-observations from existing policies, not independent training replications.
-
-The submitted routing diagnostics were similar in several respects: wrist
-attention was 51.6\% versus 54.5\%, wrist-ablation loss ratios were 11.94 versus
-11.64, and text-ablation ratios were 6.12 versus 5.39 (GR00T versus stock).
-Cross-backbone token cosine similarity averaged 0.712 (median 0.900), compared
-with 0.362 across frames within a backbone. Such summaries do not establish
-identical representations or controllers. They are consistent with both feature
-suppliers supporting these tasks, but do not identify a unique constraint.
-
-\subsection{ALOHA transfer-cube and stage decomposition}
-The submitted ALOHA contrast was 9.5 points (Table~\ref{tab:aloha}). The paper
-reports two independent training runs per backbone, each evaluated on a distinct
-200-start cohort. The first run's saved discordant counts of 47 versus 25 give
-exact McNemar $p\approx0.0128$. Per-episode outcomes for the second run were not
-recovered, so its paired test cannot be reconstructed. The reported pooled
-Wilson intervals describe rollout uncertainty, not variation across new
-training runs.
-
-\begin{table}[t]
-\centering\small\setlength{\tabcolsep}{3pt}
-\caption{Submitted ALOHA success over two reported independent training runs,
-each evaluated on 200 starts. Pooled counts are 245/400 and 207/400.}
-\label{tab:aloha}
-\begin{tabular}{@{}lrrrr@{}}
-\toprule
-Backbone & Run 1 & Run 2 & Pooled & Wilson 95\% CI \\
-\midrule
-GR00T & 60.0\% & 62.5\% & 61.25\% & [56.4, 65.9] \\
-Qwen3-VL & 49.0\% & 54.5\% & 51.75\% & [46.9, 56.6] \\
-\bottomrule
-\end{tabular}
-\end{table}
+\subsection{ALOHA: separate final and development campaigns}
+The submitted paper reported 245/400 GR00T successes and 207/400 Qwen
+successes (61.25\% and 51.75\%) across two reported runs per backbone. Original
+training provenance and complete episode outcomes have not been recovered;
+those historical counts are not merged with either later campaign.
 
 \paragraph{Prospective matched ALOHA study.}
-Three independent fixed-final policies per backbone completed 100 epochs and
+The repository analysis reports three independent fixed-final policies per backbone trained for 100 epochs and
 were evaluated on the same 200 starts within each training seed. Table~\ref{tab:aloha-matched}
-reports Qwen3-VL minus GR00T. Mean success across the three training seeds was
+reports Qwen3-VL minus GR00T. These results are transcribed from the separate repository analysis; its six raw evaluation records and paired-bootstrap output are not present in the available export, so their execution was not independently reverified here. Mean success across the three training seeds was
 49.3\% $\pm$ 6.0 for GR00T and 39.8\% $\pm$ 11.0 for Qwen3-VL; the mean paired
 difference was $-9.5\pm16.9$ points (sample SD across seeds). GR00T led in seeds
 4 and 5, while Qwen3-VL led in seed 3. These seed means are descriptive at
@@ -281,7 +238,7 @@ $n=3$; the paired rollout tests are conditional on each trained policy pair.
 
 \begin{table*}[t]
 \centering\small\setlength{\tabcolsep}{5pt}
-\caption{Prospective matched ALOHA transfer-cube results. Difference is
+\caption{Separately reported fixed-endpoint ALOHA results. Difference is
 Qwen3-VL minus GR00T; intervals are paired-bootstrap 95\% intervals. Discordant
 counts are Qwen3-VL-only / GR00T-only successes. Exact McNemar tests condition
 on the trained policies.}
@@ -307,36 +264,28 @@ training budget, normalization, head configuration, seeds, and evaluation
 rendering changed, these rates are not an exact reproduction and do not identify
 why the absolute level differs.
 
-The staged reward permits a descriptive decomposition into contact, lift, and
-handover. No submitted episode had maximum reward three, so terminal success
-and the final handover stage coincided in those summaries.
-Table~\ref{tab:stages} shows that the largest conditional difference occurred
-at handover after lift. Contact favored stock, whereas lift given contact
-favored GR00T; the original statement that both early stages favored stock is
-incorrect. The conditional populations differ between policies, so these rates
-are not ordinary matched binary outcomes and do not identify a causal mediator.
+\paragraph{Later sparse development sweep.}
+The exported sweep completes 37 checkpoint evaluations among 54 requested
+positions. The requested set includes six epoch-zero positions without checkpoints. It covers GR00T seeds
+3--5 and Qwen seeds 3--4, with 50 episodes per completed position. Missing
+positions are unmeasured, not zero-success evaluations. Repeated checkpoints
+from one training trajectory are dependent.
 
-\begin{table}[t]
-\centering\small\setlength{\tabcolsep}{5pt}
-\caption{Submitted ALOHA stage rates from 400 rollouts per endpoint.
-Conditional denominators are the episodes reaching the preceding stage;
-rounded rates are descriptive, without inherited unpaired significance tests.}
-\label{tab:stages}
-\begin{tabular}{@{}lrr@{}}
-\toprule
-Stage & GR00T & Qwen3-VL \\
-\midrule
-$P(\mathrm{contact})$ & 89.2\% & 92.5\% \\
-$P(\mathrm{lift}\mid\mathrm{contact})$ & 95.8\% & 93.8\% \\
-$P(\mathrm{handover}\mid\mathrm{lift})$ & 71.6\% & 59.7\% \\
-\bottomrule
-\end{tabular}
-\end{table}
+At epoch 250, the two measured GR00T heads score 36/50 and 29/50 (72\%, 58\%),
+and Qwen scores 23/50 and 11/50 (46\%, 22\%). The descriptive means are
+$65.0\%\pm9.90$ and $34.0\%\pm16.97$ (sample SD, $n=2$ each). This endpoint
+was inspected during development, so these summaries are not confirmation on
+an untouched final cohort. They neither replace the fixed-endpoint study nor
+establish monotonic learning, sample efficiency, or a general backbone ranking.
+Figure~\ref{fig:sparse} shows the measured trajectories without imputing gaps.
 
-The historical ALOHA checkpoint ladder also favored GR00T: at epoch 50 it
-reached 28\% versus 0\% on 50 starts; at epoch 100 the rates were 46\% versus
-22\%. These points motivate examining training trajectories, but do not establish
-a general sample-efficiency effect or a fixed reduction in training cost.
+\begin{figure}[t]
+\centering\includegraphics[width=\columnwidth]{figures/aloha_development.pdf}
+\caption{Later ALOHA development sweep. Each point is 50 rollouts from a saved
+checkpoint; lines join measured checkpoints within one training run. Missing
+checkpoints and unfinished policies are not assigned zero success.}
+\label{fig:sparse}
+\end{figure}
 
 \subsection{Observed receiving-gripper failures}
 Instrumented ALOHA rollouts recorded states, commands, staged rewards, and
@@ -374,79 +323,44 @@ established by similar aggregate rates. Likewise, the failure-category contrast
 cannot be subtracted from the pooled 400-start conditional gap to assert that
 one category explains the whole difference: the cohorts and denominators differ.
 
-The submitted attention summaries were lower for stock in both successful and
-unsuccessful episodes. Attention is correlational, and replans within an episode
-are dependent. Expert-demonstration probes also predict the opening event from
-proprioception; they do not identify the cue used by the deployed policy, but
-preclude an exclusively visual explanation from these observations alone.
-The revised implementation supports separately named, opt-in traces, calibrates
-a common threshold from training episodes, checks threshold sensitivity,
-distinguishes commands from observed opening, and averages post-lift attention
-within episodes. The seed-0 screen produced 6/50 successes with tracing and 5/50
-without tracing on matched starts; this does not establish systematic
-instrumentation noninterference. The new matched evaluation above was untraced;
-all of its unsuccessful rollouts are recorded as 400-step truncations, which
-does not identify a gripper-specific failure cause.
-
-\subsection{Harness checks and bounds on interpretation}
-Submitted LIBERO demonstration replay succeeded in 45/50 episodes without
-settling and 46/50 with five settling steps. Replay is a useful action-plumbing
-check, but is neither a policy ceiling nor proof of overall harness validity.
-Under swapped instructions the submitted LIBERO configurations scored 0/200;
-this supports instruction dependence under that intervention, without proving
-robust semantic understanding or excluding all memorization.
-
-The benchmarks differ in instruction variation, arm count, degrees of freedom,
-action space, camera configuration, and relation to robot-pretraining data.
-Downstream head size and training schedule also differ. Bimanual coordination
-and distribution match are possible explanations for the endpoint contrast;
-this design cannot separate them. The optional Cosmos ALOHA control would
-separate an intermediate adaptation from the final stage within this lineage,
-but is not completed and would not establish cross-lineage generalization.
+Attention summaries are correlational, and replans within an episode are
+dependent. Proprioceptive probes also predict the opening event, so the evidence
+does not establish an exclusively visual mechanism. No causal intervention,
+such as repairing the gripper command while holding the rest of the policy
+fixed, was evaluated. Cross-benchmark differences in instruction variation,
+embodiment, action space, heads, and training also prevent a causal explanation
+of the endpoint contrast.
 
 \section{Offline Metrics and Closed-Loop Behavior}
-\subsection{ALOHA mismatch and LIBERO ranking reversal}
-\textbf{Answer to RQ2 for ALOHA: offline validation loss did not consistently
-identify the closed-loop winner.} The submitted diagnostics in
-Table~\ref{tab:offline} differed only slightly alongside the historical
-9.5-point success contrast. In the new matched study, GR00T had lower best and
-final validation loss than Qwen3-VL in all three seed pairs, but Qwen3-VL won the
-seed-3 rollout comparison. The validation-loss minimum occurred at epochs
-16--21, while the fixed epoch-100 checkpoint had higher loss for every policy.
-Final training losses were 0.039--0.041 and final validation losses were
-0.266--0.284. This gap is consistent with late-training overfit but does not
-establish why closed-loop performance differs. The new test used a predeclared
-fixed-final checkpoint; selecting the validation-best checkpoint after seeing
-test results would change the protocol.
+\subsection{Explicit answer to RQ2}
+\textbf{The offline ranking disagreement is metric-dependent.} In the later
+LIBERO seed-3 final comparison (Table~\ref{tab:metrics}), GR00T has lower flow
+loss and lower MAE, yet lower closed-loop success. Action MSE instead favors
+Qwen and agrees with the success ordering. This single paired endpoint contrast
+does not estimate predictive calibration or correlation across a population of
+policies, nor show that all offline metrics are uninformative.
 
 \begin{table}[t]
-\centering\small\setlength{\tabcolsep}{5pt}
-\caption{Submitted ALOHA diagnostic differences, $100(Q-G)/G$, where $Q$ is
-stock and $G$ is GR00T. These are relative percentages, not percentage-point
-success differences. Attention uses demonstration frames, not rollout traces.}
-\label{tab:offline}
-\begin{tabular}{@{}lr@{}}
-\toprule
-Measure & Relative difference \\
-\midrule
-Velocity loss, overall & $+0.1\%$ \\
-Velocity loss, handover phase & $+1.9\%$ \\
-Open-loop action error (nMAE, 14 dimensions) & $-0.4\%$ \\
-Positional-encoding sensitivity & $+1.1\%$ \\
-Image-token attention mass & $-5.2\%$ \\
-Closed-loop success rate & $-15.5\%$ \\
-\bottomrule
+\centering\small
+\caption{LIBERO seed-3 selected checkpoints. Lower is better for offline
+metrics; higher is better for success. Same 6238 validation samples.}
+\label{tab:metrics}
+\begin{tabular}{@{}lrr@{}}\toprule
+Measure & GR00T & Qwen\\\midrule
+Flow loss & 0.140395 & 0.154970\\
+Action MAE & 0.075998 & 0.076583\\
+Action MSE & 0.036067 & 0.035770\\
+Final success & 84.25\% & 91.50\%\\\bottomrule
 \end{tabular}
 \end{table}
 
-LIBERO shows a configuration-ranking reversal (Table~\ref{tab:libero}). The
-two-camera configurations had the largest reported validation loss (0.0352)
-and the highest success (91.5\% and 89.0\%). Selecting the lowest-loss row
-would instead choose the 62.5\%-success configuration. This comparison changes
-camera input as well as the learned policy; it is not a pure backbone contrast.
-Expert-state validation may miss the value of a wrist view in states reached
-during rollout. The earlier frame-based validation split also limits what can
-be inferred about generalization from these losses.
+In the separate fixed-endpoint ALOHA study, GR00T has lower best and final
+validation flow loss in all three seed pairs, but Qwen wins the seed-3 rollout
+comparison. The validation minima occur at epochs 16--21; all six losses rise
+by epoch 100. Final training losses of 0.039--0.041 versus validation losses
+of 0.266--0.284 are consistent with late-training overfit, but do not identify
+the cause of closed-loop differences. Replacing the predeclared epoch-100
+checkpoint after inspecting final outcomes would change that protocol.
 
 \subsection{Why aggregate diagnostics can be insufficient}
 A receiving-gripper deviation occupies one of fourteen action dimensions and
@@ -465,78 +379,51 @@ Neither similar attention nor feature similarity is a calibrated success
 predictor. LIBERO's endpoint comparison rests on rollout outcomes, not on an
 assertion that offline agreement proves equivalent policy performance.
 
-\subsection{Language ablation and its fixed-instruction control}
-Table~\ref{tab:language} restores the six-configuration text-ablation comparison.
-ALOHA has one fixed instruction, yet zeroing text tokens raised loss by 1.14
-or 1.24 times. Removing tokens can perturb conditioning even when the instruction
-does not distinguish tasks. The larger LIBERO ratios are consistent with greater
-instruction dependence, alongside its swapped-instruction rollout failures.
-
-\begin{table}[t]
-\centering\small\setlength{\tabcolsep}{5pt}
-\caption{Submitted text-ablation loss ratios (ablated/original).
-ALOHA provides a fixed-instruction perturbation control, not a universal floor
-that can be numerically subtracted from another benchmark.}
-\label{tab:language}
-\begin{tabular}{@{}llcr@{}}
-\toprule
-Benchmark & Backbone/views & Instructions & Ratio \\
-\midrule
-ALOHA & GR00T & 1 & 1.14 \\
-ALOHA & Qwen3-VL & 1 & 1.24 \\
-LIBERO & Qwen3-VL / 2 & 10 & 5.39 \\
-LIBERO & GR00T / 2 & 10 & 6.12 \\
-LIBERO & Qwen3-VL / 1 & 10 & 7.05 \\
-LIBERO & GR00T / 1 & 10 & 7.41 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The fixed instruction may still supply task context, and its removal is an
-out-of-distribution intervention. The ALOHA ratio is therefore a measured
-control for this setting, not a pure estimate of perturbation cost that
-transfers unchanged to LIBERO. This distinction complements instruction
-robustness concerns raised by LIBERO-PRO~\cite{liberopro}.
-
-\subsection{Revised offline validation}
-The six matched ALOHA records show a direct offline--online mismatch: GR00T's
-best and final validation loss is lower in every seed pair, but it does not win
-all three paired rollout comparisons. Only five whole episodes are held out for
-validation, so these losses have limited episode-level coverage. Across policies,
-the validation minimum is reached at epochs 16--21 and rises by the fixed final
-checkpoint. This supports the narrow conclusion that validation loss did not
-reliably rank these tested ALOHA policies; it does not prove that validation
-loss is generally uninformative.
+\subsection{Exploratory transfer check}
+The later LIBERO-Spatial exploratory evaluation scores 0/50 for both seed-3
+checkpoints. Inference changes the token budget from the trained 152 to 192
+by padding, so this is a protocol deviation as well as a transfer test. It
+does not establish broad failure of transfer, equivalence of the backbones,
+or performance under a matched inference protocol. This check adds limited
+diagnostic breadth, not a completed multi-task generalization study.
 
 \section{Limitations}
-All endpoint evidence comes from one lineage, simulated tasks, and a
-frozen-backbone readout. Intermediate adaptation and robot training are combined
-in the endpoint contrast. The submitted ALOHA paper reports two independent
-training runs per backbone, but their checkpoints and per-episode records were
-not recovered for independent audit. The revised matched ALOHA study has three
-training seeds per backbone; its sample SD is still imprecise, and its protocol
-differs from the submitted experiment.
+This study evaluates two frozen endpoints in one lineage. The endpoint contrast
+combines intermediate adaptation with robot training; it does not isolate one
+pretraining dataset or stage. Cosmos-Reason2 intermediate controls, other
+backbone families, Qwen3.5-0.8B capacity controls, full-backbone fine-tuning,
+more seeds, diverse tasks, and physical robots are not completed here. The
+limited Spatial check does not close that breadth gap. No training cost or
+cost--benefit tradeoff is measured.
 
-The head, conditioning path, one fixed demonstration split, and benchmark-specific
-recipes restrict generalization. Cross-benchmark contrasts do not isolate
-embodiment or task complexity. Nonsignificance is not equivalence, and conditional
-rollout intervals do not cover unseen policies or tasks. Stage rates, attention,
-and failure categories are descriptive; no causal intervention such as activation
-patching was run. Full-backbone fine-tuning, other model lineages, more diverse
-tasks, and physical robots remain outside the present evidence. The revised
-protocol and optional intermediate control do not remove those limits.
+The fixed-endpoint ALOHA study has three independent seeds per backbone, and
+the later LIBERO final campaign has two GR00T seeds and one Qwen seed. Such
+small samples give imprecise training-variation estimates. The sparse ALOHA
+sweep is incomplete and developmental, with checkpoint dependence and missing
+paired outcome inspection for its latest records. The historical ALOHA training
+provenance remains incomplete. Different campaigns cannot be pooled to increase
+the apparent replication count.
+
+Whole-episode validation prevents frame leakage between train and validation,
+but one fixed split and few ALOHA validation episodes limit coverage. Exact
+split IDs and 447 referenced raw cloud artifacts are not bundled in the export.
+Development/final scene separation does not verify that all final scene poses
+are absent from the demonstrations. Head, normalization, budget, and rendering
+differences constrain cross-campaign comparisons. Stage rates, attention, and
+gripper categories are descriptive rather than causal, and nonsignificance
+does not establish equivalence.
 
 \section{Conclusion}
-The submitted ALOHA result reported a 9.5-point advantage for GR00T across two
-reported independent runs. In the new matched fixed-endpoint ALOHA study, the
-three-seed means were 49.3\% $\pm$ 6.0 for GR00T and 39.8\% $\pm$ 11.0 for
-Qwen3-VL, also a 9.5-point difference. The effect varied substantially by seed
-and reversed once, so this small replication does not establish a stable
-training-population advantage. Validation loss favored GR00T for all three
-pairs but did not identify the closed-loop winner consistently. The new
-evaluation was uninstrumented; historical gripper-opening behavior remains an
-observed failure pattern, not a demonstrated cause. The result is specific to
-these frozen backbones, training recipe, and simulated ALOHA task.
+For the tested frozen backbones, the fixed-endpoint three-seed ALOHA mean
+favors GR00T by 9.5 percentage points, but one seed pair reverses direction.
+The later LIBERO final results favor Qwen in the seed-3 comparison; its missing
+additional final seeds and unequal selected epochs prevent a population-level
+or equal-budget ranking. The later sparse ALOHA sweep is reported separately
+as development evidence. Offline flow loss and MAE disagree with LIBERO success
+ordering while MSE agrees, supporting a metric-specific answer to RQ2.
+Historical receiving-gripper observations remain hypotheses for further testing.
+The evidence supports a bounded empirical comparison of these configurations,
+not a general conclusion about the value of robot pretraining.
 
 \begin{thebibliography}{13}
 \bibitem{openvla} M. J. Kim et al., ``OpenVLA: An open-source vision-language-action
@@ -546,7 +433,7 @@ general robot control,'' arXiv:2410.24164, 2024.
 \bibitem{grootn1} NVIDIA, ``GR00T N1: An open foundation model for generalist
 humanoid robots,'' arXiv:2503.14734, 2025.
 \bibitem{groot17} NVIDIA, ``GR00T-N1.7-3B,'' released model card and configuration,
-\url{https://huggingface.co/nvidia/GR00T-N1.7-3B}, accessed Oct. 18, 2026.
+\url{https://huggingface.co/nvidia/GR00T-N1.7-3B}, accessed Oct. 21, 2026.
 \bibitem{robovlms} X. Li et al., ``What matters in building vision--language--action
 models for generalist robots,'' \emph{Nature Machine Intelligence}, vol. 8,
 pp. 158--172, 2026, doi: 10.1038/s42256-025-01168-7.
