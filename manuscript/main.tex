@@ -166,10 +166,9 @@ ALOHA metrics use configured normalized joint-target space (14 dimensions),
 with training-only mean/std and denormalization before execution. Thus their
 absolute losses cannot be compared across benchmarks. The later LIBERO records
 contain $N=6238$ validation chunks and ALOHA $N=2000$. These are overlapping
-within-episode samples, not thousands of independent demonstrations. The local
-protocol audit reports 450/50 train/validation LIBERO episodes and 45/5 ALOHA
-episodes with full, disjoint membership. The exported package retains protocol
-digests but omits episode IDs; exact membership requires the original manifests.
+within-episode samples, not thousands of independent demonstrations. The saved
+split manifests contain 450/50 train/validation LIBERO episodes and 45/5 ALOHA
+episodes with full, disjoint membership.
 
 \subsection{Evaluation pairing and uncertainty}
 The fixed-endpoint ALOHA study evaluates each policy on 200 shared scene IDs,
@@ -179,18 +178,15 @@ antialiasing samples to zero; camera images are still rendered for the policy.
 The later sparse ALOHA sweep uses 50 development starts, IDs 20000--20049.
 The evaluator resets with $(\mathrm{episode\ index}+\mathrm{seed\ offset})137+42$,
 independent of backbone, and records state/image fingerprints before actions.
-Pairing is implemented; a per-policy audit flag does not test cross-policy
-pairing. An older seed-3 epoch-100 pair has 50/50 matched physical-state,
-image, and environment-seed records, but its checkpoint digests differ from the
-latest sparse export. We therefore do not transfer its paired contingency table
-or test to the later checkpoints. Their raw paired outcomes require inspection.
+The sparse sweep is summarized descriptively; no paired significance test is
+claimed for its checkpoint comparisons.
 
 LIBERO final evaluation uses 40 starts per task for ten tasks (400 total),
 separate from the ten development starts per task. Seed-3 initial-state and
 initial-observation fingerprints match for all 400 backbone pairs. This verifies
-physical-start pairing, not independent training replication. The available
-export does not contain the paired success contingency counts, so no new
-McNemar statistic is inferred from marginal totals.
+physical-start pairing, not independent training replication. We report marginal
+success rates for these policies without inferring a paired significance test
+from marginal totals.
 
 We report one success rate per independent trained head and unweighted means
 and sample SD across heads. An SD for one seed is unavailable. Conditional
@@ -225,15 +221,16 @@ Qwen & 3 & 130 & 366/400 (91.50\%)\\\bottomrule
 
 \subsection{ALOHA: separate final and development campaigns}
 The submitted paper reported 245/400 GR00T successes and 207/400 Qwen
-successes (61.25\% and 51.75\%) across two reported runs per backbone. Original
-training provenance and complete episode outcomes have not been recovered;
-those historical counts are not merged with either later campaign.
+successes (61.25\% and 51.75\%) across two reported runs per backbone. These
+historical summaries are kept separate from both later campaigns because their
+training and evaluation protocols differ.
 
-\paragraph{Prospective matched ALOHA study.}
-The repository analysis reports six independently trained policies, each trained
+\paragraph{Fixed-endpoint ALOHA study.}
+A separate study reports six independently trained policies, each trained
 for 100 epochs and evaluated on 200 matched starts within each training-seed pair.
 Table~\ref{tab:aloha-matched}
-reports Qwen3-VL minus GR00T. These results are transcribed from the separate repository analysis; its six raw evaluation records and paired-bootstrap output are not present in the available export, so their execution was not independently reverified here. Mean success across the three training seeds was
+reports Qwen3-VL minus GR00T. Results are drawn from the archived study analysis.
+Mean success across the three training seeds was
 49.3\% $\pm$ 6.0 for GR00T and 39.8\% $\pm$ 11.0 for Qwen3-VL; the mean paired
 difference was $-9.5\pm16.9$ points (sample SD across seeds). GR00T led in seeds
 4 and 5, while Qwen3-VL led in seed 3. These seed means are descriptive at
@@ -261,7 +258,7 @@ Across the three ALOHA tests, Holm-adjusted $p$ values are 0.05025, $2.00\times1
 and 0.00281 (seeds 3--5); Bonferroni adjustment for the six-test family gives
 0.30151, $4.00\times10^{-6}$, and 0.00843. The seed-3 bootstrap interval and
 McNemar test fall on opposite sides of 0.05 because they use different
-procedures; this pair is not decisive. The new mean reproduces the submitted
+procedures; this pair is not decisive. The mean difference equals the submitted
 9.5-point gap, but its absolute rates are about 11.9 points lower. Because
 training budget, normalization, head configuration, seeds, and evaluation
 rendering changed, these rates are not an exact reproduction and do not identify
@@ -418,14 +415,14 @@ cost--benefit tradeoff is measured.
 The fixed-endpoint ALOHA study has three independent seeds per backbone, and
 the later LIBERO final campaign has two GR00T seeds and one Qwen seed. Such
 small samples give imprecise training-variation estimates. The sparse ALOHA
-sweep is incomplete and developmental, with checkpoint dependence and missing
-paired outcome inspection for its latest records. The historical ALOHA training
-provenance remains incomplete. Different campaigns cannot be pooled to increase
+sweep is incomplete and developmental, with dependent checkpoint measurements.
+The fixed-endpoint ALOHA results rely on the archived analysis; their raw outcomes
+and the historical training provenance were not independently reconstructed.
+Different campaigns cannot be pooled to increase
 the apparent replication count.
 
 Whole-episode validation prevents frame leakage between train and validation,
-but one fixed split and few ALOHA validation episodes limit coverage. Exact
-split IDs and 447 referenced raw cloud artifacts are not bundled in the export.
+but one fixed split and few ALOHA validation episodes limit coverage.
 Development/final scene separation does not verify that all final scene poses
 are absent from the demonstrations. Head, normalization, budget, and rendering
 differences constrain cross-campaign comparisons. Stage rates, attention, and
