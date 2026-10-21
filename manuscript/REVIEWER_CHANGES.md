@@ -34,3 +34,7 @@ The 37 measured ALOHA checkpoint results are shown in separate seed panels with 
 ## Final author-requested no-figure version
 
 All figure environments, image inclusions and figure-only references were removed. All four table environments were compared with the preceding source and verified unchanged verbatim. Measured numerical results, authorship metadata and the IEEE copyright notice are preserved. No external image dependency remains.
+
+## LIBERO table layout refinement
+
+Removed only the Epoch column from the LIBERO final-results table at the authors request. Backbone, training seed and success counts/rates are unchanged. The other three tables and all non-table manuscript text are unchanged, including the Methods disclosure of selected epochs and unequal training budgets.
