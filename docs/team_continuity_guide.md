@@ -14,7 +14,7 @@ This guide is for a teammate picking up the experiment and manuscript work. The 
 
 - The original submitted paper and the six completed `camera_ready_fixed_endpoint_v1` ALOHA policies are **historical evidence**. The new RunPod study is a separate, update-matched follow-up; never pool the results as if they used one recipe.
 - Two B300 MIG Pods are running detached workers: one for ALOHA and one for LIBERO. Closing or sleeping the laptop does not stop them. Stopping or deleting a Pod does.
-- At the latest log check, **neither Pod had started policy training**. Both were still encoding frozen-backbone features for GR00T (`exp05`, seed 3). The latest observed progress was approximately ALOHA `19/625` batches and LIBERO `10/2656` batches. No policy had completed.
+- At the latest log check, **neither Pod had started policy training**. Both were still encoding frozen-backbone features for GR00T (`exp05`, seed 3). The latest observed progress was approximately ALOHA `28/625` batches and LIBERO `14/2656` batches. No policy had completed.
 - Do not launch another copy while either worker is alive. The unsuffixed run folder `runpod_update_matched_v1` is a stale first-launch folder; the active studies use the suffixed `_aloha` and `_libero` folders.
 - The active Pod source directories are not Git checkouts. The lock file records code hashes, not the source contents. The local repository also has uncommitted changes; preserve them and the active Pods until a reproducible code snapshot is secured.
 

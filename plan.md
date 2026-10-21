@@ -6,7 +6,7 @@ Updated 20 October 2026. All six ALOHA policies in `camera_ready_fixed_endpoint_
 
 - The six ALOHA policies are complete and passed the locked result verifier: GR00T N1.7 and Qwen3-VL, each trained with seeds 3, 4, and 5.
 - Each policy was evaluated on 200 starts. Within each training seed, both backbones used the same initial states, environment seeds, and policy-sampling seeds. The fixed checkpoint was epoch 100.
-- The active ALOHA worker was at about 19/625 precompute batches and the LIBERO worker at about 10/2,656 at the latest log check. Their `study_status.json` files show `running` / `precompute`, with no completed policies. These are live-run observations, not final experiment results.
+- The active ALOHA worker was at about 28/625 precompute batches and the LIBERO worker at about 14/2,656 at the latest log check. Their `study_status.json` files show `running` / `precompute`, with no completed policies. These are live-run observations, not final experiment results.
 - The RunPod protocol and plan are locked. Both workers are detached with `nohup`; closing the laptop does not stop them. Do not launch duplicates. Run artifacts sync to `/workspace-global/action-omni/study_v1/runs/`; active embedding caches remain on each Pod's local disk and must be regenerated if lost.
 - Preserve the previously requested battery gate for new local heavy tasks: after charge falls below 35%, wait until it reaches 70% before starting another one. This gate does not interrupt or pause the already-running cloud workers.
 - Detailed verification and calculation notes are in [docs/aloha_results_analysis.md](docs/aloha_results_analysis.md). The submitted baseline is [paper_76.pdf](C:/Users/SK/Downloads/paper_76.pdf).
