@@ -1,0 +1,4 @@
+training_seed,backbone,epoch,successes,episodes,success_rate
+3,GR00T,100,337,400,0.8425
+3,Qwen,130,366,400,0.915
+4,GR00T,110,356,400,0.89

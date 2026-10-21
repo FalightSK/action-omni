@@ -26,3 +26,7 @@ The parent task obtained and extracted the original attached PDF and supplied it
 ## Build
 
 Standard multi-file LaTeX: `pdflatex main.tex` twice, or `tectonic main.tex`, from this directory. References are embedded in `main.tex`; no separate `.bib` is required. The figure was generated deterministically from the 37 measured export CSV rows. Compiler/renderer dependencies and raw experiment exports must not be committed with the manuscript.
+
+## Measured-data visualization update
+
+The 37 measured ALOHA checkpoint results are shown in separate seed panels with visible markers, an external legend and common 0-100% axes. Straight connectors are guides to the eye, not interpolated observations. Qwen seed 5 is explicitly unmeasured. A new final LIBERO policy chart displays the three exact 400-episode counts. No scientific number or prose conclusion changed.
