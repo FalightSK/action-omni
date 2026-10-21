@@ -1,4 +1,5 @@
 \documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
 \usepackage[T1]{fontenc}
 \usepackage{amsmath,amssymb,booktabs,array}
 \usepackage{xcolor}
@@ -8,16 +9,15 @@
 \newcommand{\groot}{GR00T N1.7}
 \newcommand{\qwen}{Qwen3-VL-2B}
 \title{When and How Does Robot Pretraining Help? Observability, Task Structure, and the Failure of Offline Metrics in Vision--Language--Action Policies}
-\author{\IEEEauthorblockN{Anonymous Author(s)}
-\IEEEauthorblockA{Anonymous Affiliation\\
-anonymous@example.com}}
+\author{\IEEEauthorblockN{Sittipon Kumda\IEEEauthorrefmark{1} and Rachata Pratheep Na Thalang\IEEEauthorrefmark{1}}\IEEEauthorblockA{King Mongkut's Institute of Technology Ladkrabang\\Thailand\\sittiponkumda@gmail.com, pratheepg49@gmail.com}\thanks{\IEEEauthorrefmark{1}These authors contributed equally to this work.}}
+\IEEEpubid{\makebox[\columnwidth][l]{\footnotesize 979-8-3195-1044-0/26/\$31.00~\copyright2026 IEEE}\hspace{\columnsep}\makebox[\columnwidth]{}}
 \begin{document}
 \maketitle
 \begin{abstract}
 We compare frozen Qwen3-VL-2B and the vision--language subtree of GR00T N1.7
 with newly trained action heads in simulated manipulation. In a fixed-100-epoch
 ALOHA study, three independent training seeds per backbone yield success means
-of $49.3\%\pm6.0$ and $39.8\%\pm11.0$, respectively (sample SD); one seed
+of $49.3\%\pm6.0$ for GR00T and $39.8\%\pm11.0$ for Qwen (sample SD); one seed
 pair reverses the mean ordering. A separate development-selected LIBERO-Goal
 campaign yields 84.25\% and 89.00\% for two GR00T seeds, and 91.50\% for one
 Qwen seed. The incomplete replication and unequal selected training endpoints
@@ -69,6 +69,7 @@ in training, selection, and evaluation, so their success rates are not pooled.
 Training seeds index independent learned heads; checkpoint measurements and
 additional rollout scenes do not constitute new training runs.
 
+\IEEEpubidadjcol
 \section{Related Work}
 \textbf{VLA design studies.} RoboVLMs studies backbone, architecture, and data
 choices across more than 600 experiments~\cite{robovlms}; OpenVLA, $\pi_0$, and
@@ -173,7 +174,8 @@ digests but omits episode IDs; exact membership requires the original manifests.
 \subsection{Evaluation pairing and uncertainty}
 The fixed-endpoint ALOHA study evaluates each policy on 200 shared scene IDs,
 10000--10199, within each training-seed pair, with matched environment and
-policy-sampling seeds. It disables videos, tracing, and rendered samples.
+policy-sampling seeds. It saves no videos or traces and sets offscreen
+antialiasing samples to zero; camera images are still rendered for the policy.
 The later sparse ALOHA sweep uses 50 development starts, IDs 20000--20049.
 The evaluator resets with $(\mathrm{episode\ index}+\mathrm{seed\ offset})137+42$,
 independent of backbone, and records state/image fingerprints before actions.
@@ -228,8 +230,9 @@ training provenance and complete episode outcomes have not been recovered;
 those historical counts are not merged with either later campaign.
 
 \paragraph{Prospective matched ALOHA study.}
-The repository analysis reports three independent fixed-final policies per backbone trained for 100 epochs and
-were evaluated on the same 200 starts within each training seed. Table~\ref{tab:aloha-matched}
+The repository analysis reports six independently trained policies, each trained
+for 100 epochs and evaluated on 200 matched starts within each training-seed pair.
+Table~\ref{tab:aloha-matched}
 reports Qwen3-VL minus GR00T. These results are transcribed from the separate repository analysis; its six raw evaluation records and paired-bootstrap output are not present in the available export, so their execution was not independently reverified here. Mean success across the three training seeds was
 49.3\% $\pm$ 6.0 for GR00T and 39.8\% $\pm$ 11.0 for Qwen3-VL; the mean paired
 difference was $-9.5\pm16.9$ points (sample SD across seeds). GR00T led in seeds
@@ -288,6 +291,13 @@ checkpoints and unfinished policies are not assigned zero success.}
 \end{figure}
 
 \subsection{Observed receiving-gripper failures}
+Historical staged reward summaries report contact rates of 89.2\%/92.5\%,
+lift given contact of 95.8\%/93.8\%, and handover given lift of 71.6\%/59.7\%
+(GR00T/Qwen). Contact favors Qwen, whereas lift given contact and handover given
+lift favor GR00T. These descriptive conditional rates use different populations
+under each policy and do not identify a causal mediator or support ordinary
+matched binary tests of the conditional rates.
+
 Instrumented ALOHA rollouts recorded states, commands, staged rewards, and
 per-replan attention on a separate 200-start cohort per endpoint.
 Table~\ref{tab:failures} preserves the original behavioral categories, with
@@ -378,6 +388,15 @@ our two-endpoint study does not test scaling or identify an emergence mechanism.
 Neither similar attention nor feature similarity is a calibrated success
 predictor. LIBERO's endpoint comparison rests on rollout outcomes, not on an
 assertion that offline agreement proves equivalent policy performance.
+
+\subsection{Historical fixed-instruction language control}
+In the submitted diagnostics, zeroing text tokens raises flow loss by factors
+of 1.14 for GR00T and 1.24 for Qwen on fixed-instruction ALOHA, versus 6.12
+and 5.39 on two-camera LIBERO. The ALOHA control shows that token removal can
+perturb conditioning even when text does not distinguish tasks. Larger LIBERO
+ratios are consistent with instruction dependence, but do not establish semantic
+understanding. This intervention is out of distribution; the ALOHA ratio is not
+a universal perturbation floor that can be subtracted from LIBERO.
 
 \subsection{Exploratory transfer check}
 The later LIBERO-Spatial exploratory evaluation scores 0/50 for both seed-3
